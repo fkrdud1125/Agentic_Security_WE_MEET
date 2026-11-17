@@ -40,8 +40,15 @@ jobs:
               subprocess.run(["vibescan","scan",str(sample),"--offline","--output",str(base / "out")],cwd=base,env=env,check=True)
               raw = next((base / "out").glob("*/scan_result.json"))
               r = ScanResult.from_json(raw.read_text(encoding="utf-8"))
-              assert sorted(f.cwe for f in r.findings) == ["CWE-798","CWE-79","CWE-89"] or {f.cwe for f in r.findings} == {"CWE-798","CWE-79","CWE-89"}
+              assert {f.cwe for f in r.findings} == {"CWE-798","CWE-79","CWE-89"}
               assert len(r.findings) == 3 and r.profile.framework == "Flask" and r.profile.routes == 2
               assert "we_meet_fixture_token" not in raw.read_text(encoding="utf-8")
               assert raw.with_name("report.md").read_text(encoding="utf-8") == r.report_md
+              dest = Path(os.environ["RUNNER_TEMP"]) / "vibescan-demo"
+              shutil.copytree(raw.parent, dest)
               print("CLI E2E passed:", r.profile.framework, r.profile.routes, "routes,", len(r.findings), "findings")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sample-report-${{ matrix.os }}
+          path: ${{ runner.temp }}/vibescan-demo/
+          retention-days: 14

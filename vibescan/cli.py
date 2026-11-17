@@ -5,6 +5,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import uuid
 from collections import Counter
@@ -147,6 +148,10 @@ def scan(repo, output, directory, offline=False):
 
 
 def main():
+    if sys.platform == "win32":
+        for stream in (sys.stdout, sys.stderr):
+            if not stream.isatty() and hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(prog="vibescan")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("login", help="ChatGPT 로컬 로그인")

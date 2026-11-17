@@ -1,3 +1,6 @@
+import json
+import shutil
+import subprocess
 import time
 import unittest
 from pathlib import Path
@@ -9,7 +12,8 @@ import jwt
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 
-from vibescan import session
+from scanner.models import ScanResult
+from vibescan import cli, inference, session
 from vibescan.login import login_app
 
 
@@ -50,6 +54,51 @@ class SessionTests(unittest.TestCase):
                 self.assertEqual(exchange.call_count, 1)
                 self.assertEqual(exchange.call_args.kwargs["redirect_uri"], args["redirect_uri"][0])
             self.assertEqual(session.access_token(self.directory), "access")
+
+        # Continue from that saved session, using the real Git and Semgrep binaries.
+        repo = self.directory / "sample"
+        repo.mkdir()
+        source = Path(__file__).resolve().parents[1] / "vulnapp"
+        for name in ("app.py", "static_cases.py"):
+            shutil.copyfile(source / name, repo / name)
+        for args in (["init", "-q"], ["add", "."], ["-c", "user.name=Test", "-c",
+                     "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "sample"]):
+            subprocess.run(["git", "-C", str(repo), *args], check=True)
+
+        def provider(method, path, token, **kwargs):
+            self.assertEqual(token, "access")
+            result = Mock()
+            result.__enter__ = Mock(return_value=result)
+            result.__exit__ = Mock(return_value=None)
+            if path == "/models":
+                result.json.return_value = {"models": [{"slug": "test-model", "visibility": "list"}]}
+                return result
+            payload = kwargs["json"]
+            self.assertEqual((method, path), ("POST", "/responses"))
+            self.assertFalse(payload["store"])
+            self.assertTrue(payload["stream"])
+            self.assertNotIn("we_meet_fixture_token", payload["input"])
+            data = json.loads(payload["input"])
+            if isinstance(data, dict):
+                answer = {"checks": cli.CHECKS, "profile_note": "Flask 라우트 두 개를 확인했습니다."}
+            else:
+                answer = {"reviews": [{"id": item["id"], "impact": "코드 검토 필요",
+                           "fix": "해당 위치에서 수정을 검토하세요.", "confidence": "Potential"} for item in data]}
+            result.iter_lines.return_value = [
+                b"data: " + json.dumps({"type": "response.output_text.delta",
+                                        "delta": json.dumps(answer)}).encode(),
+                b'data: {"type":"response.completed"}',
+            ]
+            return result
+
+        with patch.object(inference, "request", side_effect=provider) as remote:
+            folder, note = cli.scan(repo, self.directory / "reports", self.directory)
+        self.assertEqual(remote.call_count, 3)
+        self.assertIn("3/3", note)
+        result = ScanResult.from_json((folder / "scan_result.json").read_text(encoding="utf-8"))
+        self.assertEqual(result.profile.framework, "Flask")
+        self.assertEqual(len(result.findings), 3)
+        self.assertEqual(result.report_md, (folder / "report.md").read_text(encoding="utf-8"))
 
     def test_identity_rejections(self):
         for token in (self.identity("other"), self.identity(issuer="bad"), self.identity(audience="bad")):
