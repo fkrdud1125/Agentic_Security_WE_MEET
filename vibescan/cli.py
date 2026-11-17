@@ -149,7 +149,9 @@ def main():
             if not stream.isatty() and hasattr(stream, "reconfigure"):
                 stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(prog="vibescan")
-    commands = parser.add_subparsers(dest="command", required=True)
+    commands = parser.add_subparsers(dest="command")
+    dashboard = commands.add_parser("dashboard", help="저장된 진단 결과를 로컬 대시보드에서 확인")
+    dashboard.add_argument("--results", type=Path, help="scan --output으로 지정한 결과 상위 폴더")
     commands.add_parser("login", help="ChatGPT 로컬 로그인")
     run = commands.add_parser("scan", help="로컬 Git 저장소 전체 검사")
     run.add_argument("repo", type=Path)
@@ -158,7 +160,10 @@ def main():
     args = parser.parse_args()
     try:
         directory = data_dir()
-        if args.command == "login":
+        if args.command in (None, "dashboard"):
+            from .dashboard import serve
+            serve(getattr(args, "results", None) or directory / "scans")
+        elif args.command == "login":
             from .login import login
             print(login(directory))
         else:

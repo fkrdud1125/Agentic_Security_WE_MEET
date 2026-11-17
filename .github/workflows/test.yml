@@ -29,6 +29,12 @@ jobs:
           from pathlib import Path
           with tempfile.TemporaryDirectory() as tmp:
               base = Path(tmp)
+              subprocess.run(["python", "-c",
+                  "from pathlib import Path; from fastapi.testclient import TestClient; "
+                  "from vibescan.dashboard import dashboard_app; "
+                  "c = TestClient(dashboard_app(Path('missing'), '127.0.0.1:8765', 'test'), base_url='http://127.0.0.1:8765'); "
+                  "assert all(c.get(p).status_code == 200 for p in ['/', '/assets/dashboard.js', '/assets/dashboard.css'])"],
+                  cwd=base, check=True)
               sample = base / "sample"
               sample.mkdir()
               for name in ("app.py", "static_cases.py"):

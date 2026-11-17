@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VibeScan · 보안 진단</title>
+  <link rel="stylesheet" href="/assets/dashboard.css">
+  <script defer src="/assets/dashboard.js"></script>
+</head>
+<body>
+  <aside>
+    <a class="brand" href="/">V<span>▰</span> VibeScan</a>
+    <p class="eyebrow">LOCAL SECURITY WORKSPACE</p>
+    <div class="nav-current">◈ &nbsp; 진단 결과</div>
+    <div class="aside-note"><span class="dot"></span> 내 PC에서 실행 중<br>저장된 결과를 읽기 전용으로 확인합니다.</div>
+  </aside>
+  <main>
+    <header><div><p class="eyebrow">SECURITY OVERVIEW</p><h1>코드를 이해하고,<br class="mobile-only"> 더 안전하게.</h1>
+      <p class="muted">발견된 문제의 근거부터 수정 방법까지 한곳에서 확인하세요.</p></div>
+      <button id="refresh" type="button">결과 새로고침 ↻</button></header>
+    <p id="message" role="status" aria-live="polite">저장된 진단 결과를 불러오는 중입니다.</p>
+    <section class="panel selector">
+      <label for="scan-select">스캔 이력</label><select id="scan-select" disabled><option>결과를 불러오는 중</option></select>
+      <p id="results-path" class="muted"></p>
+    </section>
+    <section id="empty" class="panel empty" hidden>
+      <span class="empty-icon">◇</span><h2>첫 진단 결과를 기다리고 있어요</h2>
+      <p>터미널에서 저장소를 검사한 뒤 위의 ‘결과 새로고침’을 눌러주세요.</p>
+      <pre>vibescan scan "저장소 경로" --offline</pre>
+      <p class="muted">ChatGPT 분석을 사용하려면 <code>vibescan login</code> 후 <code>--offline</code> 없이 검사하세요.<br>
+        다른 출력 폴더는 <code>vibescan dashboard --results "출력 폴더"</code>로 열 수 있습니다.</p>
+    </section>
+    <div id="result" hidden>
+      <section class="repo-heading"><div><h2 id="repo-name"></h2><p id="repo-meta" class="muted"></p></div>
+        <button id="download" type="button">보고서 다운로드 ↓</button></section>
+      <section class="metrics" aria-label="진단 요약">
+        <article class="panel score"><span>위험 점수</span><div><strong id="risk"></strong><span> / 100</span></div><small>열린 발견의 가중 합계 · 안전 보증 아님</small></article>
+        <article class="panel"><span>검토할 발견</span><strong id="total" class="metric"></strong><small id="dismissed"></small></article>
+        <article class="panel distribution"><span>심각도 분포</span><div id="severity-bars"></div></article>
+        <article class="panel"><span>커밋 변화</span><strong id="delta" class="delta"></strong><small id="delta-note"></small></article>
+      </section>
+      <section class="panel coverage"><h2>이번 진단이 확인한 범위</h2><p id="analysis-note"></p><p id="profile" class="muted"></p>
+        <ul id="coverage"></ul><ul id="limitations" class="muted"></ul></section>
+      <section class="panel"><div class="section-heading"><h2>먼저 확인하세요</h2><span class="muted">열린 발견 중 우선순위 3건</span></div><div id="priorities"></div></section>
+      <section class="panel findings-panel">
+        <div class="section-heading"><h2>발견 목록 <span id="filtered-count" class="muted"></span></h2></div>
+        <div class="filters">
+          <label>심각도<select id="severity-filter"><option value="">전체 심각도</option><option>Critical</option><option>High</option><option>Medium</option><option>Low</option><option>Info</option></select></label>
+          <label>상태<select id="status-filter"><option value="open">열림</option><option value="">전체 상태</option><option value="dismissed">오탐 후보</option><option value="fixed">수정됨</option></select></label>
+          <label class="search">파일·제목·유형<input id="search" type="search" placeholder="파일명, SQL, CWE-89…"></label>
+        </div>
+        <div class="table-scroll"><table><thead><tr><th>심각도</th><th>발견 / 위치</th><th>상태</th><th>신뢰도</th><th>변화</th></tr></thead><tbody id="findings"></tbody></table></div>
+        <p id="no-findings" class="muted" hidden>조건에 맞는 발견이 없습니다. 미검사 항목은 위의 진단 범위에서 확인하세요.</p>
+      </section>
+    </div>
+    <footer>VibeScan · 로컬 정적 진단 <span>자동 수정 없이, 근거를 확인하고 결정하세요.</span></footer>
+  </main>
+  <dialog id="detail" aria-labelledby="detail-title">
+    <div class="section-heading"><span id="detail-badge"></span><button id="close-detail" type="button" aria-label="발견 상세 닫기">닫기 ×</button></div>
+    <h2 id="detail-title"></h2><p id="detail-meta" class="muted"></p>
+    <h3>발견 근거</h3><pre id="evidence"></pre><p id="how-found" class="muted"></p>
+    <h3>영향</h3><p id="impact"></p><h3>판정 근거</h3><p id="triage"></p>
+    <h3>수정 방법</h3><p id="remediation"></p>
+    <div class="section-heading"><h3>수정안</h3><button id="copy-diff" type="button">수정안 복사</button></div>
+    <p id="fix-note" class="notice"></p><pre id="fix-diff"></pre><p id="copy-status" role="status"></p>
+  </dialog>
+</body>
+</html>

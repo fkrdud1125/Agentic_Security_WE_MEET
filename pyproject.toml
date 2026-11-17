@@ -19,5 +19,8 @@ vibescan = "vibescan.cli:main"
 [tool.setuptools]
 packages = ["scanner", "vibescan"]
 
+[tool.setuptools.package-data]
+vibescan = ["web/*.html", "web/*.css", "web/*.js"]
+
 [tool.setuptools.data-files]
 "share/vibescan" = ["rules/sample.yml"]
