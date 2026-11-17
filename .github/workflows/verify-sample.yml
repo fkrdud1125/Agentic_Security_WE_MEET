@@ -1,0 +1,19 @@
+name: Sample scan verification
+on:
+  push:
+    branches: [verify/semgrep-sample]
+permissions:
+  contents: read
+jobs:
+  sample:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - run: |
+          python3 -m venv "$RUNNER_TEMP/sg"
+          "$RUNNER_TEMP/sg/bin/pip" -q install semgrep==1.185.0
+          "$RUNNER_TEMP/sg/bin/semgrep" scan --metrics=off --disable-version-check --no-rewrite-rule-ids --config rules/sample.yml --json-output="$RUNNER_TEMP/result.json" vulnapp
+          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("SAMPLE_JSON="+json.dumps(d,ensure_ascii=True,separators=(",",":"))); assert not d["errors"] and len(d["results"]) == 3' "$RUNNER_TEMP/result.json"
