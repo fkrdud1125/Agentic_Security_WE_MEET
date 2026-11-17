@@ -67,6 +67,9 @@ class Finding:
     status: Status = Status.OPEN
     change: Change | None = None
     introduced_in: str | None = None
+    original_severity: Severity | None = None
+    triage_reason: str = ""
+    fix_note: str = "로컬 참고 예시 · 실제 코드 문맥에서 검토 필요"
 
 
 @dataclass
@@ -80,6 +83,9 @@ class AppProfile:
     framework: str | None
     routes: int
     auth: str | None
+    analysis_ko: str = ""
+    surfaces: list[dict] = field(default_factory=list)
+    limitations: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -101,6 +107,7 @@ class ScanResult:
 
     checklist: list[str] = field(default_factory=list)
     analysis_note: str = ""
+    coverage: list[dict] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, raw: str):
@@ -116,6 +123,7 @@ class ScanResult:
                 confidence=Confidence(item["confidence"]),
                 status=Status(item.get("status", "open")),
                 change=Change(item["change"]) if item.get("change") is not None else None,
+                original_severity=Severity(item["original_severity"]) if item.get("original_severity") else None,
             )
             findings.append(Finding(**fields))
         return cls(
@@ -127,6 +135,7 @@ class ScanResult:
             scan_type=ScanType(data.get("scan_type", "full")),
             trigger=Trigger(data.get("trigger", "manual")),
             checklist=data.get("checklist", []), analysis_note=data.get("analysis_note", ""),
+            coverage=data.get("coverage", []),
         )
 
     def to_dict(self) -> dict:
@@ -143,7 +152,7 @@ class ScanResult:
         summary = {severity.value: 0 for severity in Severity}
         delta = {"new": 0, "fixed": 0}
         for finding in self.findings:
-            if finding.change != Change.FIXED:
+            if finding.change != Change.FIXED and finding.status == Status.OPEN:
                 summary[finding.severity] += 1
             if finding.change in delta:
                 delta[finding.change] += 1
@@ -154,6 +163,7 @@ class ScanResult:
         data["scanned_at"] = self.scanned_at.isoformat()
         data["mode"] = "graybox" if self.target.url else "source-only"
         data["summary"] = summary
+        data["dismissed_count"] = sum(f.status == Status.DISMISSED for f in self.findings)
         return data
 
     def to_json(self) -> str:

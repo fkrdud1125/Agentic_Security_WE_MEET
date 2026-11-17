@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from scanner.models import ScanResult
 from vibescan import cli, inference, session
 from vibescan.login import login_app
+from model_answers import plan_answer, review_answer
 
 
 class SessionTests(unittest.TestCase):
@@ -82,10 +83,12 @@ class SessionTests(unittest.TestCase):
             self.assertEqual(payload["input"][0]["role"], "user")
             data = json.loads(payload["input"][0]["content"])
             if isinstance(data, dict):
-                answer = {"checks": cli.CHECKS, "profile_note": "Flask 라우트 두 개를 확인했습니다."}
+                answer = plan_answer(data)
             else:
-                answer = {"reviews": [{"id": item["id"], "impact": "코드 검토 필요",
-                           "fix": "해당 위치에서 수정을 검토하세요.", "confidence": "Potential"} for item in data]}
+                answer = review_answer(data)
+                for item, review in zip(data, answer["reviews"]):
+                    if "Markup(title)" in (item["snippet"] or {}).get("code", ""):
+                        review["replacement"] = "def render_note(title):\n    from markupsafe import escape\n    return escape(title)\n"
             result.iter_lines.return_value = [
                 b"data: " + json.dumps({"type": "response.output_text.delta",
                                         "delta": json.dumps(answer)}).encode(),
@@ -100,6 +103,10 @@ class SessionTests(unittest.TestCase):
         result = ScanResult.from_json((folder / "scan_result.json").read_text(encoding="utf-8"))
         self.assertEqual(result.profile.framework, "Flask")
         self.assertEqual(len(result.findings), 3)
+        markup = next(f for f in result.findings if f.cwe == "CWE-79")
+        self.assertIn("문법 확인", markup.fix_note)
+        self.assertIn("+    return escape(title)", markup.fix_diff)
+        self.assertEqual(len(result.coverage), 5)
         self.assertEqual(result.report_md, (folder / "report.md").read_text(encoding="utf-8"))
 
     def test_identity_rejections(self):

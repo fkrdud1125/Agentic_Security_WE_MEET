@@ -1,6 +1,7 @@
 """Bounded, text-only Responses API calls using the selected ChatGPT session."""
 
 import json
+import time
 
 import requests
 
@@ -35,7 +36,10 @@ def ask(token, model, instruction, data):
     with request("POST", "/responses", token, json=payload, stream=True) as response:
         chunks = []
         size = 0
+        deadline = time.monotonic() + 120
         for line in response.iter_lines():
+            if time.monotonic() > deadline or len(line) > 262144:
+                break
             if not line.startswith(b"data:"):
                 continue
             raw = line[5:].strip()
@@ -44,6 +48,8 @@ def ask(token, model, instruction, data):
             event = json.loads(raw)
             if event["type"] == "response.output_text.delta":
                 delta = event["delta"]
+                if not isinstance(delta, str):
+                    break
                 size += len(delta)
                 if size > 64000:
                     break

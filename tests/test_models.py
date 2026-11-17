@@ -3,7 +3,7 @@ import unittest
 from datetime import datetime, timezone
 
 from scanner.models import (
-    AppProfile, Confidence, Finding, Location, ScanResult, Severity, Target,
+    AppProfile, Confidence, Finding, Location, ScanResult, Severity, Status, Target,
 )
 
 
@@ -55,6 +55,17 @@ class ScanResultTests(unittest.TestCase):
             with self.subTest(score=score), self.assertRaises(ValueError):
                 self.result.risk_score = score
                 self.result.to_json()
+
+    def test_dismissed_findings_do_not_count_as_open(self):
+        self.test_graybox_finding()
+        finding = self.result.findings[0]
+        finding.status = Status.DISMISSED
+        finding.original_severity = Severity.HIGH
+        finding.triage_reason = "오탐 후보 근거"
+        data = self.result.to_dict()
+        self.assertEqual(data["summary"]["Low"], 0)
+        self.assertEqual(data["dismissed_count"], 1)
+        self.assertEqual(ScanResult.from_json(self.result.to_json()), self.result)
 
     def test_timestamp_requires_timezone(self):
         self.result.scanned_at = self.result.scanned_at.replace(tzinfo=None)

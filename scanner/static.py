@@ -18,6 +18,7 @@ from .models import AppProfile, Confidence, Finding, Location, Severity
 VISIBLE_NAMES = {"return", "def", "if", "else", "execute", "fetchone", "Markup", "True", "False", "None"}
 SECRET = re.compile(r"""(?ix)["']?\b[\w.-]*(?:api[_-]?key|secret|password|token)\b["']?\s*[:=]\s*["']([^"'\r\n]{8,})["']""")
 KEY = re.compile(r"\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,})")
+SENSITIVE = re.compile(r"api.?key|secret|password|token|credential|authorization|private.?key", re.I)
 DETAILS = {
     "literal-token": ("소스에 포함된 인증정보 후보", "CWE-798", "A07:2021", Severity.HIGH,
                       "코드 열람자에게 인증정보가 노출될 수 있습니다.",
@@ -32,6 +33,26 @@ DETAILS = {
                          "템플릿의 자동 이스케이프를 유지하거나 값을 HTML 문맥에 맞게 이스케이프하세요.",
                          "- return Markup(title)\n+ return markupsafe.escape(title)"),
 }
+
+
+def sensitive_literals(tree):
+    """Find literal values under credential assignments, dict keys and keyword arguments."""
+    literals = []
+    for node in ast.walk(tree):
+        values = []
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if any(SENSITIVE.search(ast.unparse(t)) for t in targets) and node.value is not None:
+                values.append(node.value)
+        if isinstance(node, ast.keyword) and node.arg and SENSITIVE.search(node.arg):
+            values.append(node.value)
+        if isinstance(node, ast.Dict):
+            values.extend(v for k, v in zip(node.keys, node.values)
+                          if isinstance(k, ast.Constant) and isinstance(k.value, str) and SENSITIVE.search(k.value))
+        for value in values:
+            literals.extend(n for n in ast.walk(value) if isinstance(n, ast.JoinedStr)
+                            or isinstance(n, ast.Constant) and isinstance(n.value, str))
+    return literals
 
 
 def masked_line(line):
@@ -105,10 +126,18 @@ def inspect(directory, files):
     matched_lines = {(name, line) for name, line, _ in indexed}
     excerpts = {}
     for name in files:
-        for number, line in enumerate((directory / name).read_text(encoding="utf-8").splitlines(), 1):
+        content = (directory / name).read_text(encoding="utf-8")
+        secret_lines = set()
+        if name.endswith(".py"):
+            try:
+                secret_lines = {n.lineno for n in sensitive_literals(ast.parse(content))
+                                if isinstance(n, ast.Constant) and len(n.value) >= 8}
+            except (SyntaxError, ValueError):
+                pass
+        for number, line in enumerate(content.splitlines(), 1):
             if (name, number) in matched_lines:
                 excerpts[(name, number)] = masked_line(line)
-            if SECRET.search(line) or KEY.search(line):
+            if number in secret_lines or SECRET.search(line) or KEY.search(line):
                 indexed.setdefault((name, number, "literal-token"), []).append("static:secret")
     findings = []
     for number, ((name, line, rule), methods) in enumerate(sorted(indexed.items()), 1):

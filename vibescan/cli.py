@@ -8,72 +8,63 @@ import subprocess
 import sys
 import tempfile
 import uuid
-from collections import Counter
-from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
 
 from scanner.history import save_scan
+from scanner.context import Context
 from scanner.ingest import snapshot
-from scanner.models import Confidence, ScanResult, Severity, Target
+from scanner.models import ScanResult, Severity, Status, Target
 from scanner.static import inspect, profile
-from . import inference
+from . import analysis, inference
 from .register import data_dir
 from .session import SessionError, access_token
 
-CHECKS = ["하드코딩 시크릿", "SQL 문자열 결합", "HTML 이스케이프 생략"]
 MANUAL = ["인증·인가 정책 확인", "응답 헤더·쿠키 확인"]
 
 
 def render(result):
+    opened = [f for f in result.findings if f.status == Status.OPEN]
+    dismissed = [f for f in result.findings if f.status == Status.DISMISSED]
     rows = [f"# 보안 진단 보고서 — {result.app_name}", "",
             f"- 커밋: `{result.commit}`", f"- 진단 일시: {result.scanned_at.isoformat()}",
-            f"- 위험 점수: {result.risk_score}/100 · 발견 {len(result.findings)}건",
+            f"- 위험 점수: {result.risk_score}/100 · 검토 대상 {len(opened)}건 · 오탐 후보 {len(dismissed)}건",
             f"- 진단 범위: 커밋된 소스의 정적 패턴 및 시크릿 검사",
             f"- 앱 프로파일: {result.profile.framework or '프레임워크 미확인'} · "
             f"라우트 데코레이터 {result.profile.routes}개 · {result.profile.auth or '인증 방식 미확인'}",
             f"- 모델 분석: {result.analysis_note}", "",
-            "## 점검 목록", *["- " + s for s in result.checklist], "",
-            "## 발견 및 수정 방법"]
-    for f in sorted(result.findings, key=lambda item: list(Severity).index(item.severity)):
+            "## 정찰 결과", result.profile.analysis_ko or "로컬 구조 분석만 수행했습니다."]
+    rows.extend(f"- {p['file']}:{p['line']} · {p['kind']}: {p['note']}" for p in result.profile.surfaces)
+    rows.extend("- " + s for s in result.profile.limitations)
+    rows.extend(["", "## 점검 계획과 범위"])
+    for check in result.coverage:
+        mode = {"completed": "정적 검사 완료", "unsupported": "지원 Python 소스 없음 · 미검사",
+                "manual": "수동 확인 필요 · 미검사"}[check["execution"]]
+        rows.append(f"- {check['name']} [{mode}]: {check['reason']}")
+    rows.extend(["", "## 발견 및 수정 방법"])
+    for f in sorted(opened, key=lambda item: list(Severity).index(item.severity)):
         rows.extend(["", f"### {f.id} · {f.severity} · {f.title}", "",
                      f"- 위치: `{f.location.file}:{f.location.line}`",
                      f"- 근거: `{f.evidence}` ({', '.join(f.how_found)})",
                      f"- 분류: {f.cwe} · {f.owasp} · {f.confidence}",
+                     f"- 판정 근거: {f.triage_reason or '로컬 규칙 탐지 · 모델 검토 없음'}",
+                     f"- 최초 규칙 심각도: {f.original_severity or f.severity}",
                      f"- 영향: {f.impact_ko}", f"- 수정 방법: {f.remediation_ko}",
-                     "", "수정 예시", "", "```diff", f.fix_diff, "```"])
-    if not result.findings:
+                     "", f.fix_note, "", "```diff", f.fix_diff, "```"])
+    if not opened:
         rows.append("적용한 규칙에서 발견된 항목이 없습니다.")
+        if dismissed:
+            rows[-1] = "모델이 모든 발견을 오탐 후보로 분류했습니다. 아래 근거를 직접 확인하세요."
+    if dismissed:
+        rows.extend(["", "## 오탐 후보 — 원래 발견을 보존하며 개발자 확인 필요"])
+        for f in dismissed:
+            rows.extend([f"- {f.id} · {f.title} · {f.location.file}:{f.location.line}",
+                         f"  최초 심각도: {f.original_severity} · 근거: {f.triage_reason}"])
     rows.extend(["", "## 추가 확인", *["- " + s for s in MANUAL],
                  "- 외부 입력 도달 여부와 제시한 수정 예시는 실제 호출 문맥에서 검토하세요."])
     return "\n".join(rows) + "\n"
-
-
-def review(findings, token, model):
-    selected = sorted(findings, key=lambda f: list(Severity).index(f.severity))[:30]
-    data = [{"id": f.id, "type": f.title, "evidence": f.evidence,
-             "severity": f.severity.value} for f in selected]
-    answer = inference.ask(token, model, "각 발견의 영향과 수정 방법을 한국어로 작성하라. "
-                           "reviews 배열의 각 객체는 id, impact, fix, confidence(Likely/Potential)를 갖는다. "
-                           "실제 입력 경로를 알 수 없으므로 단정하지 마라.", data)
-    allowed = {f.id: f for f in selected}
-    validated = {}
-    for item in answer["reviews"]:
-        fid = item["id"]
-        if fid not in allowed or fid in validated or item["confidence"] not in ("Likely", "Potential"):
-            raise ValueError("invalid review")
-        if not all(isinstance(item[k], str) and 0 < len(item[k].strip()) <= 1200 for k in ("impact", "fix")):
-            raise ValueError("invalid explanation")
-        validated[fid] = item
-    if set(validated) != set(allowed):
-        raise ValueError("incomplete review")
-    for fid, item in validated.items():
-        f = allowed[fid]
-        f.impact_ko, f.remediation_ko = item["impact"], item["fix"]
-        f.confidence = Confidence(item["confidence"])
-    return len(selected)
 
 
 def scan(repo, output, directory, offline=False):
@@ -82,53 +73,58 @@ def scan(repo, output, directory, offline=False):
     if output.is_relative_to(repo) or directory.resolve().is_relative_to(repo):
         raise ValueError("결과와 이력은 검사 대상 저장소 밖에 저장해야 합니다.")
     scan_id = uuid.uuid4().hex
-    checklist = CHECKS.copy()
+    coverage = analysis.default_coverage()
     note = "로컬 규칙으로 작성"
     active = None
     with tempfile.TemporaryDirectory() as temp:
         source = Path(temp)
         commit, branch, files = snapshot(repo, source)
+        if not files:
+            raise ValueError("제외 규칙 적용 후 검사 가능한 텍스트 파일이 없습니다.")
         app = profile(source, files)
+        context = Context(source, files)
+        app.limitations = ["Python 소스 정찰 및 제한된 정적 규칙 검사입니다. 동적 검사는 수행하지 않았습니다."]
         if not offline:
             try:
                 token = access_token(directory)
                 model = inference.model_for(token)
-                facts = {"profile": asdict(app), "file_types": dict(Counter(Path(p).suffix for p in files)),
-                         "layout": [{"depth": len(Path(p).parts), "ext": Path(p).suffix} for p in files[:80]],
-                         "checks": CHECKS}
-                answer = inference.ask(token, model, "프로파일을 보고 checks 세 항목을 권장 점검 순으로 정렬하고 "
-                                       "원래 이름 그대로 checks 배열로 반환하라. profile_note에는 확인된 프레임워크, "
-                                       "라우트 수와 인증 방식의 확인 한계를 한국어 한 문장으로 요약하라.", facts)
-                ordered = answer["checks"]
-                if not isinstance(ordered, list) or sorted(ordered) != sorted(CHECKS):
-                    raise ValueError("invalid plan")
-                summary = answer.get("profile_note", "")
-                if not isinstance(summary, str) or len(summary) > 400:
-                    raise ValueError("invalid profile")
-                checklist = ordered
                 active = token, model
-                note = "모델 점검 계획 적용" + (" · " + summary.strip() if summary.strip() else "")
+                coverage = analysis.plan(context, app, *active)
+                note = "코드 문맥 기반 정찰·점검 계획 적용"
             except SessionError as exc:
+                active = None
                 note = f"로컬 규칙으로 작성 · {exc}"
             except (OSError, ValueError, KeyError, TypeError, sqlite3.Error, requests.RequestException):
-                note = "모델 연결 또는 응답 확인 실패 · 로컬 규칙으로 작성"
+                note = "모델 정찰·계획 확인 실패 · 고정 점검 계획 적용"
         findings = inspect(source, files)
-        priority = dict(zip(('CWE-798', 'CWE-89', 'CWE-79'), CHECKS))
-        findings.sort(key=lambda f: checklist.index(priority[f.cwe]))
+        for check in coverage:
+            check["execution"] = ("manual" if check["mode"] == "manual" else
+                                  "unsupported" if check["id"] in ("sql", "xss") and not context.sources
+                                  else "completed")
+        priority = {'CWE-798': 'secrets', 'CWE-89': 'sql', 'CWE-79': 'xss'}
+        order = [c['id'] for c in coverage]
+        findings.sort(key=lambda f: (list(Severity).index(f.severity), order.index(priority[f.cwe])))
         if active and findings:
-            try:
-                count = review(findings, *active)
-                note += f" · 한국어 상세 검토 {count}/{len(findings)}건"
-            except SessionError as exc:
-                note += f" · 상세 검토는 로컬 수정안 사용 ({exc})"
-            except (ValueError, KeyError, TypeError, requests.RequestException):
-                note += " · 상세 검토는 로컬 수정안 사용"
+            count = 0
+            for start in range(0, min(len(findings), 30), 5):
+                try:
+                    count += analysis.review(context, findings[start:start + 5], *active)
+                except SessionError as exc:
+                    note += f" · 남은 검토는 로컬 수정안 사용 ({exc})"
+                    break
+                except (ValueError, KeyError, TypeError, requests.RequestException):
+                    note += " · 모델 검토 확인 실패 · 남은 항목은 로컬 수정안 사용"
+                    break
+            note += f" · 한국어 상세 검토 {count}/{len(findings)}건"
+            if len(findings) > 30:
+                note += " · 모델 검토 상한 30건, 나머지는 로컬 규칙 결과"
 
     weights = {Severity.CRITICAL: 40, Severity.HIGH: 20, Severity.MEDIUM: 10,
                Severity.LOW: 3, Severity.INFO: 0}
     result = ScanResult(scan_id, repo.name, datetime.now(timezone.utc), Target(str(repo)),
-                        min(100, sum(weights[f.severity] for f in findings)), app, findings, "",
-                        branch=branch, commit=commit, checklist=checklist, analysis_note=note)
+                        min(100, sum(weights[f.severity] for f in findings if f.status == Status.OPEN)), app, findings, "",
+                        branch=branch, commit=commit, checklist=[c['name'] for c in coverage],
+                        analysis_note=note, coverage=coverage)
     result.report_md = render(result)
     output.mkdir(parents=True, exist_ok=True)
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
