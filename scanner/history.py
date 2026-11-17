@@ -70,7 +70,7 @@ def list_scans(database: Path, repo_path: str) -> list[dict]:
         db.executescript(SCHEMA)
         db.row_factory = sqlite3.Row
         rows = db.execute("""
-            SELECT * FROM scans WHERE repo_path = ?
+            SELECT * FROM scans WHERE repo_path IN (?, ?)
             ORDER BY scanned_at DESC, scan_id DESC
-        """, (repo_path,))
+        """, (repo_path, str(Path(repo_path).expanduser().resolve())))
         return [dict(row) for row in rows]

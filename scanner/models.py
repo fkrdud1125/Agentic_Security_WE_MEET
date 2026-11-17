@@ -1,7 +1,7 @@
 """진단 엔진과 대시보드가 공유하는 데이터 모델."""
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import StrEnum
 
@@ -99,6 +99,9 @@ class ScanResult:
     scan_type: ScanType = ScanType.FULL
     trigger: Trigger = Trigger.MANUAL
 
+    checklist: list[str] = field(default_factory=list)
+    analysis_note: str = ""
+
     @classmethod
     def from_json(cls, raw: str):
         data = json.loads(raw)
@@ -123,6 +126,7 @@ class ScanResult:
             commit=data.get("commit"), baseline_commit=data.get("baseline_commit"),
             scan_type=ScanType(data.get("scan_type", "full")),
             trigger=Trigger(data.get("trigger", "manual")),
+            checklist=data.get("checklist", []), analysis_note=data.get("analysis_note", ""),
         )
 
     def to_dict(self) -> dict:

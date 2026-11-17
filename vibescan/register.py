@@ -15,12 +15,38 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 
+def data_dir():
+    if sys.platform == "win32":
+        return Path(os.environ["LOCALAPPDATA"]) / "vibescan"
+    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "vibescan"
+
+
+def authorization_url(host_id, client, redirect, state, nonce, verifier, hint=None):
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    challenge = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+    params = {
+        "client_id": client or "dynamic_agent_client",
+        "ext_agent_host_id": host_id,
+        "redirect_uri": redirect,
+        "response_type": "code",
+        "scope": "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct",
+        "resource": "https://api.openai.com/v1",
+        "state": state,
+        "nonce": nonce,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+    }
+    if not client:
+        params["agent_name_hint"] = "VibeScan"
+    if hint:
+        params["id_token_hint"] = hint
+    return "https://auth.openai.com/api/accounts/authorize?" + urlencode(params)
+
+
 def request_registration(host_id):
     state = secrets.token_urlsafe(32)
     nonce = secrets.token_urlsafe(32)
     verifier = secrets.token_urlsafe(64)
-    digest = hashlib.sha256(verifier.encode("ascii")).digest()
-    challenge = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
     client_id = None
     failure = None
 
@@ -60,20 +86,7 @@ def request_registration(host_id):
 
     with HTTPServer(("127.0.0.1", 0), Callback) as server:
         address = f"127.0.0.1:{server.server_port}"
-        params = {
-            "client_id": "dynamic_agent_client",
-            "agent_name_hint": "VibeScan",
-            "ext_agent_host_id": host_id,
-            "redirect_uri": f"http://{address}/auth/callback",
-            "response_type": "code",
-            "scope": "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct",
-            "resource": "https://api.openai.com/v1",
-            "state": state,
-            "nonce": nonce,
-            "code_challenge": challenge,
-            "code_challenge_method": "S256",
-        }
-        url = "https://auth.openai.com/api/accounts/authorize?" + urlencode(params)
+        url = authorization_url(host_id, None, f"http://{address}/auth/callback", state, nonce, verifier)
         if not webbrowser.open(url):
             raise RuntimeError("기본 브라우저를 열 수 없습니다.")
         deadline = time.monotonic() + 300
@@ -108,12 +121,8 @@ def register(directory):
 
 
 def main():
-    if sys.platform == "win32":
-        root = Path(os.environ["LOCALAPPDATA"])
-    else:
-        root = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
     try:
-        created = register(root / "vibescan")
+        created = register(data_dir())
     except (OSError, sqlite3.Error, RuntimeError) as exc:
         sys.exit(f"등록 실패: {exc}")
     print("클라이언트 ID를 저장했습니다." if created else "이미 등록된 설치입니다.")

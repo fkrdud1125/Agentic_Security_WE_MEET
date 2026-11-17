@@ -18,11 +18,35 @@ VibeScan은 사용자 PC에서 Git 저장소를 점검하고, 발견한 문제�
 Python 3.11 이상에서 저장소 루트에서 실행합니다. 샘플 앱 테스트에는 Flask가 필요합니다.
 
 ```sh
-python -m pip install -r vulnapp/requirements.txt
+python -m pip install . -r vulnapp/requirements.txt httpx
 python -m unittest discover -s tests -v
 ```
 
 `ScanResult.to_json()`은 한국어를 유지한 JSON 문자열을 반환합니다. `mode`는 실행 URL 유무에 따라 `source-only` 또는 `graybox`가 되며, `summary`는 발견 목록에서 심각도별 건수를 계산합니다. `risk_score`는 엔진이 산정해 전달할 0~100점 값입니다.
+
+## 설치 및 수동 진단
+
+Python 3.11 이상과 Git이 필요합니다. 저장소 루트에서 가상환경에 설치합니다.
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python -m pip install .
+.\.venv\Scripts\python -m vibescan.register
+.\.venv\Scripts\vibescan login
+.\.venv\Scripts\vibescan scan ..\vulnapp-repo
+```
+
+이미 클라이언트를 등록한 PC에서는 `login`부터 진행합니다. 샘플을 독립 저장소로 만드는 방법은 [샘플 README](vulnapp/README.md)에 있습니다. macOS·Linux에서는 가상환경의 `bin/vibescan`을 사용합니다.
+
+- 기본 스캔은 HEAD 커밋에서 검사 대상 텍스트 파일을 읽습니다. 변경 중인 작업 트리, 링크, 빌드 산출물, `.env*` 파일은 제외합니다. Git의 커밋된 무시 규칙과 루트의 `.vibescanignore`도 적용합니다.
+- 수동 로그인 상태에서는 계정의 모델 목록을 조회한 뒤 정찰·계획과 상세 검토를 배치로 요청합니다. 파일 종류별 개수, 구조 요약, 값과 식별자를 가린 코드 근거를 사용합니다. 상세 검토는 심각도순 최대 30건입니다.
+- `vibescan scan <경로> --offline`은 모델 호출을 생략합니다. 미로그인·구독 권한 부족·사용량 초과·모델 응답 오류에서도 정적 결과와 한국어 수정 예시가 남습니다. Semgrep 자체가 실패하면 오류로 종료합니다.
+- 출력된 실행 폴더의 `scan_result.json`과 `report.md`에 결과가 있습니다. `--output <폴더>`로 저장 위치를 정할 수 있습니다. 기본 위치는 사용자 설정 디렉터리 아래의 `scans/<scan_id>`이며, 메타데이터 이력은 같은 설정 디렉터리의 `scan-history.sqlite3`에 저장합니다.
+- 로그인은 `127.0.0.1`의 임시 포트에서 진행합니다. 세션은 Windows에서 현재 사용자 DPAPI, POSIX에서 사용자 전용 권한으로 보호합니다. 사용량과 앱 권한은 ChatGPT 설정에서 관리할 수 있습니다.
+
+현재 Semgrep 규칙의 범위는 Python의 SQL 조합·마크업·문자열 자격증명 패턴입니다. 별도 시크릿 검사는 지원하는 텍스트 파일에도 적용합니다. 점수는 Critical 40, High 20, Medium 10, Low 3, Info 0을 합해 최대 100으로 제한한 참고 지표입니다. 출력되는 diff는 개발자가 실제 코드에 맞춰 검토할 예시입니다.
+
+[단계별 구현 계획과 검증 기준](docs/sprint1.md)
 
 ## 커밋별 스캔 이력
 
@@ -51,7 +75,7 @@ print(list_scans(database, result.target.source))
 python -m vibescan.register
 ```
 
-명령은 `127.0.0.1`의 임시 포트에서 최대 5분간 응답을 기다립니다. 승인하면 설치 식별자와 발급된 클라이언트 ID가 Windows의 `%LOCALAPPDATA%/vibescan`, 그 밖의 환경의 `$XDG_CONFIG_HOME/vibescan`(기본 `~/.config/vibescan`)에 저장됩니다. 같은 설치에서 다시 실행하면 기존 등록을 확인합니다. 현재 명령은 첫 프로필의 등록까지 처리합니다. 로그인 세션을 만드는 토큰 교환과 구독을 사용하는 모델 호출은 후속 작업입니다. [OpenAI 등록 문서](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)
+명령은 `127.0.0.1`의 임시 포트에서 최대 5분간 응답을 기다립니다. 승인하면 설치 식별자와 발급된 클라이언트 ID가 Windows의 `%LOCALAPPDATA%/vibescan`, 그 밖의 환경의 `$XDG_CONFIG_HOME/vibescan`(기본 `~/.config/vibescan`)에 저장됩니다. 같은 설치에서 다시 실행하면 기존 등록을 확인합니다. 등록 후 아래의 로그인 명령으로 같은 계정에 연결합니다. [OpenAI 등록 문서](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)
 
 ## v6 기반 작업 진행 상황
 
