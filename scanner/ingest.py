@@ -1,5 +1,6 @@
 """Materialize eligible regular Git blobs at one commit without executing repo code."""
 
+import io
 import os
 import subprocess
 from pathlib import Path, PureWindowsPath
@@ -14,12 +15,30 @@ MAX_FILE = 1024 * 1024
 MAX_TOTAL = 64 * MAX_FILE
 
 
-def git(repo, *args):
+def git(repo, *args, input_bytes=None):
     run = subprocess.run(["git", "--no-replace-objects", "-C", str(repo), *args],
-                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60)
+                         input=input_bytes, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60)
     if run.returncode:
         raise ValueError("커밋이 있는 로컬 Git 저장소를 지정하세요.")
     return run.stdout
+
+
+def ignored(path, ignores):
+    chain = list(reversed(path.parents))
+    custom = ignores.get(Path(".vibescanignore"))
+    # Git cannot re-include a child while its parent directory is excluded.
+    for depth, candidate in enumerate([*chain[1:], path], 1):
+        suffix = "" if candidate == path else "/"
+        decision = None
+        for base in chain[:depth]:
+            spec = ignores.get(base / ".gitignore")
+            if spec:
+                match = spec.check_file(candidate.relative_to(base).as_posix() + suffix)
+                if match.include is not None:
+                    decision = match.include
+        if decision or (custom and custom.match_file(candidate.as_posix() + suffix)):
+            return True
+    return False
 
 
 def snapshot(repo, destination):
@@ -55,23 +74,25 @@ def snapshot(repo, destination):
               and not path.name.startswith(".")):
             entries.append((path, oid.decode(), int(size)))
 
-    files = []
+    selected = []
     total = 0
     for path, oid, size in entries:
-        excluded = False
-        for parent in reversed(path.parents):
-            spec = ignores.get(parent / ".gitignore")
-            if spec:
-                include = spec.check_file(path.relative_to(parent).as_posix()).include
-                if include is not None:
-                    excluded = include
-        custom = ignores.get(Path(".vibescanignore"))
-        if excluded or (custom and custom.match_file(path.as_posix())):
+        if ignored(path, ignores):
             continue
         total += size
         if total > MAX_TOTAL:
             raise ValueError("검사 대상이 64 MiB를 초과합니다. .vibescanignore로 범위를 줄이세요.")
-        blob = git(root, "cat-file", "blob", oid)
+        selected.append((path, oid, size))
+    stream = io.BytesIO(git(root, "cat-file", "--batch",
+                            input_bytes=b"".join(oid.encode() + b"\n" for _, oid, _ in selected)))
+    files = []
+    for path, oid, size in selected:
+        header = stream.readline().split()
+        if header != [oid.encode(), b"blob", str(size).encode()]:
+            raise ValueError("Git 파일 내용을 읽지 못했습니다.")
+        blob = stream.read(size)
+        if len(blob) != size or stream.read(1) != b"\n":
+            raise ValueError("Git 파일이 불완전합니다.")
         try:
             blob.decode("utf-8")
         except UnicodeDecodeError:

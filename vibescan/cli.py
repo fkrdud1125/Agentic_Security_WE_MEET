@@ -31,6 +31,8 @@ def render(result):
             f"- 커밋: `{result.commit}`", f"- 진단 일시: {result.scanned_at.isoformat()}",
             f"- 위험 점수: {result.risk_score}/100 · 발견 {len(result.findings)}건",
             f"- 진단 범위: 커밋된 소스의 정적 패턴 및 시크릿 검사",
+            f"- 앱 프로파일: {result.profile.framework or '프레임워크 미확인'} · "
+            f"라우트 데코레이터 {result.profile.routes}개 · {result.profile.auth or '인증 방식 미확인'}",
             f"- 모델 분석: {result.analysis_note}", "",
             "## 점검 목록", *["- " + s for s in result.checklist], "",
             "## 발견 및 수정 방법"]
@@ -91,15 +93,20 @@ def scan(repo, output, directory, offline=False):
                 token = access_token(directory)
                 model = inference.model_for(token)
                 facts = {"profile": asdict(app), "file_types": dict(Counter(Path(p).suffix for p in files)),
+                         "layout": [{"depth": len(Path(p).parts), "ext": Path(p).suffix} for p in files[:80]],
                          "checks": CHECKS}
                 answer = inference.ask(token, model, "프로파일을 보고 checks 세 항목을 권장 점검 순으로 정렬하고 "
-                                       "원래 이름 그대로 checks 배열로 반환하라.", facts)
+                                       "원래 이름 그대로 checks 배열로 반환하라. profile_note에는 확인된 프레임워크, "
+                                       "라우트 수와 인증 방식의 확인 한계를 한국어 한 문장으로 요약하라.", facts)
                 ordered = answer["checks"]
                 if not isinstance(ordered, list) or sorted(ordered) != sorted(CHECKS):
                     raise ValueError("invalid plan")
+                summary = answer.get("profile_note", "")
+                if not isinstance(summary, str) or len(summary) > 400:
+                    raise ValueError("invalid profile")
                 checklist = ordered
                 active = token, model
-                note = "모델 점검 계획 적용"
+                note = "모델 점검 계획 적용" + (" · " + summary.strip() if summary.strip() else "")
             except SessionError as exc:
                 note = f"로컬 규칙으로 작성 · {exc}"
             except (OSError, ValueError, KeyError, TypeError, sqlite3.Error, requests.RequestException):

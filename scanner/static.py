@@ -3,6 +3,7 @@
 import ast
 import io
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -46,6 +47,7 @@ def masked_line(line):
 def profile(directory, files):
     frameworks = set()
     routes = 0
+    auth_signals = set()
     for name in files:
         if not name.endswith(".py"):
             continue
@@ -57,6 +59,9 @@ def profile(directory, files):
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 modules = [node.module or ""] if isinstance(node, ast.ImportFrom) else [a.name for a in node.names]
                 for module in modules:
+                    package = module.split(".")[0]
+                    if package in {"flask_login", "flask_jwt_extended", "jwt", "authlib"}:
+                        auth_signals.add(package)
                     label = {"flask": "Flask", "fastapi": "FastAPI", "django": "Django"}.get(module.split(".")[0])
                     if label:
                         frameworks.add(label)
@@ -64,7 +69,8 @@ def profile(directory, files):
                 routes += sum(isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute)
                               and d.func.attr in {"route", "get", "post", "put", "patch", "delete"}
                               for d in node.decorator_list)
-    return AppProfile(", ".join(sorted(frameworks)) or None, routes, None)
+    auth = "인증 관련 모듈 참조: " + ", ".join(sorted(auth_signals)) if auth_signals else None
+    return AppProfile(", ".join(sorted(frameworks)) or None, routes, auth)
 
 
 def semgrep(directory):
@@ -77,7 +83,8 @@ def semgrep(directory):
         rules = Path(sysconfig.get_path("data")) / "share/vibescan/sample.yml"
     command = [binary, "scan", "--metrics=off", "--disable-version-check", "--no-git-ignore",
                "--no-rewrite-rule-ids", "--strict", "--config", str(rules), "--json", "."]
-    run = subprocess.run(command, cwd=directory, capture_output=True, timeout=180)
+    run = subprocess.run(command, cwd=directory, capture_output=True, timeout=180,
+                         env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
     if run.returncode:
         raise RuntimeError(f"Semgrep 실행 실패 (종료 코드 {run.returncode}).")
     data = json.loads(run.stdout)

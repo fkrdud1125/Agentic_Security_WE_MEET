@@ -1,5 +1,4 @@
 import json
-import os
 import subprocess
 import unittest
 from pathlib import Path
@@ -27,7 +26,15 @@ class PipelineTests(unittest.TestCase):
         (self.repo / "binary.py").write_bytes(b"a\0b")
         (self.repo / ".vibescanignore").write_text("ignore.py\n")
         (self.repo / "ignore.py").write_text("SENSITIVE")
+        (self.repo / "nested").mkdir()
+        (self.repo / "nested" / "hide.py").write_text("SENSITIVE")
+        (self.repo / "nested" / ".gitignore").write_text("!hide.py")
+        with (self.repo / ".gitignore").open("a") as ignored:
+            ignored.write("nested/\n")
         self.git("add", "-f", ".")
+        oid = subprocess.check_output(["git", "-C", str(self.repo), "hash-object", "-w", "--stdin"],
+                                      input=b"app.py").decode().strip()
+        self.git("update-index", "--add", "--cacheinfo", f"120000,{oid},link.py")
         self.git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
                  "-c", "commit.gpgsign=false", "commit", "-qm", "sample")
         (self.repo / "app.py").write_text("dirty = True")
@@ -80,3 +87,19 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(inference.ask("t", "m", "instructions", {}), {})
             self.assertFalse(send.call_args.kwargs["json"]["store"])
             self.assertTrue(send.call_args.kwargs["json"]["stream"])
+
+    def test_requests_that_disable_model_use(self):
+        for status in (401, 403, 429):
+            response = Mock(status_code=status)
+            with self.subTest(status=status), patch("requests.request", return_value=response) as call:
+                with self.assertRaises(inference.SessionError):
+                    inference.request("GET", "/models", "private-test-token")
+                self.assertEqual(call.call_count, 1)
+                response.close.assert_called_once()
+
+    def test_scan_failure_leaves_no_success_artifacts(self):
+        with patch("scanner.static.semgrep", side_effect=RuntimeError("analysis failed")):
+            with self.assertRaises(RuntimeError):
+                cli.scan(self.repo, self.base / "out", self.base / "state", offline=True)
+        self.assertFalse((self.base / "out").exists())
+        self.assertFalse((self.base / "state/scan-history.sqlite3").exists())
