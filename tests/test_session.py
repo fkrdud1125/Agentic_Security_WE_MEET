@@ -77,8 +77,10 @@ class SessionTests(unittest.TestCase):
             self.assertEqual((method, path), ("POST", "/responses"))
             self.assertFalse(payload["store"])
             self.assertTrue(payload["stream"])
-            self.assertNotIn("we_meet_fixture_token", payload["input"])
-            data = json.loads(payload["input"])
+            self.assertNotIn("we_meet_fixture_token", json.dumps(payload["input"]))
+            self.assertEqual(len(payload["input"]), 1)
+            self.assertEqual(payload["input"][0]["role"], "user")
+            data = json.loads(payload["input"][0]["content"])
             if isinstance(data, dict):
                 answer = {"checks": cli.CHECKS, "profile_note": "Flask 라우트 두 개를 확인했습니다."}
             else:

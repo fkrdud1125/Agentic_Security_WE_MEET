@@ -87,6 +87,8 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(inference.ask("t", "m", "instructions", {}), {})
             self.assertFalse(send.call_args.kwargs["json"]["store"])
             self.assertTrue(send.call_args.kwargs["json"]["stream"])
+            self.assertEqual(send.call_args.kwargs["json"]["input"],
+                             [{"role": "user", "content": "{}"}])
 
     def test_requests_that_disable_model_use(self):
         for status in (401, 403, 429):
@@ -95,6 +97,14 @@ class PipelineTests(unittest.TestCase):
                 with self.assertRaises(inference.SessionError):
                     inference.request("GET", "/models", "private-test-token")
                 self.assertEqual(call.call_count, 1)
+                response.close.assert_called_once()
+
+    def test_bad_request_identifies_the_failed_stage(self):
+        for path, stage in (("/models", "모델 목록 조회"), ("/responses", "모델 응답 생성")):
+            response = Mock(status_code=400)
+            with self.subTest(path=path), patch("requests.request", return_value=response):
+                with self.assertRaisesRegex(inference.SessionError, stage + " 실패 · HTTP 400"):
+                    inference.request("POST", path, "private-test-token")
                 response.close.assert_called_once()
 
     def test_scan_failure_leaves_no_success_artifacts(self):
