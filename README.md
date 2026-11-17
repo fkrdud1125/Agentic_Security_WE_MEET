@@ -7,15 +7,16 @@ AI로 만든 웹앱의 소스 코드를 점검하고, 발견한 문제의 위치
 | 경로 | 역할 |
 | --- | --- |
 | `scanner/models.py` | 발견 한 건을 나타내는 `Finding`, 스캔 전체를 나타내는 `ScanResult`, JSON 직렬화 |
-| `vulnapp/` | Sprint 0에서 추가할 로컬 Flask 샘플 앱 |
+| [`vulnapp/`](vulnapp/README.md) | 로컬 Flask 샘플 앱과 탐지 기준표 |
 | `tests/` | 엔진과 대시보드가 공유하는 데이터 형식 검증 |
 | `dashboard/` | Sprint 2에서 구현할 웹 화면 |
 
 ## 개발 시작
 
-Python 3.11 이상에서 저장소 루트에서 실행합니다. 현재 모델과 테스트는 표준 라이브러리만 사용합니다.
+Python 3.11 이상에서 저장소 루트에서 실행합니다. 샘플 앱 테스트에는 Flask가 필요합니다.
 
 ```sh
+python -m pip install -r vulnapp/requirements.txt
 python -m unittest discover -s tests -v
 ```
 
@@ -24,6 +25,6 @@ python -m unittest discover -s tests -v
 ## Sprint 0 진행 상황
 
 - [x] 저장소 구조 및 Finding / ScanResult 데이터 모델
-- [ ] 로컬 Flask 샘플 앱 구성
+- [x] 로컬 Flask 샘플 앱 구성
 - [ ] Semgrep 실행 및 JSON 결과 파싱 확인
 - [ ] 로컬 Ollama 모델의 OpenAI 호환 호출 확인
