@@ -7,3 +7,4 @@ __pycache__/
 /scan_result.json
 /report.md
 /artifacts/
+/scan-history.sqlite3*
