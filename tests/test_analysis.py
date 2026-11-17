@@ -182,6 +182,7 @@ token2 = f"prefix-secret-{설명}"
         payload = context.recon()
         self.assertLessEqual(len(payload), 12)
         self.assertLessEqual(sum(len(s["code"]) for s in payload), 24000)
+        self.assertEqual({s["kind"] for s in payload}, {"input", "database", "route_or_guard", "import"})
 
     def test_shared_secrets_are_redacted_before_definition_and_across_files(self):
         (self.root / "shared.py").write_text('def f():\n    return "prefix private-fixture-123456 suffix"\n')
@@ -197,3 +198,26 @@ token2 = f"prefix-secret-{설명}"
             findings = inspect(self.root, ["credentials.py"])
         self.assertEqual([f.location.line for f in findings], [2, 4])
         self.assertTrue(all(f.cwe == "CWE-798" for f in findings))
+
+    def test_environment_variable_names_are_not_literal_credentials(self):
+        from scanner.static import inspect
+        source = 'import os\nAPI_TOKEN = os.environ["API_TOKEN"]\npassword = os.getenv("PASSWORD")\nsecret = os.environ.get("SECRET", "fallback-secret-value")\n'
+        (self.root / "environment.py").write_text(source)
+        safe, _ = sanitize(source)
+        self.assertIn('os.environ["API_TOKEN"]', safe)
+        self.assertIn('os.getenv("PASSWORD")', safe)
+        self.assertNotIn("fallback-secret-value", safe)
+        with patch("scanner.static.semgrep", return_value=[]):
+            findings = inspect(self.root, ["environment.py"])
+        self.assertEqual([f.location.line for f in findings], [4])
+        context = Context(self.root, ["app.py"])
+        snippet = context.excerpt("app.py", 5)
+        replacement = 'import os\n' + snippet["code"].replace("API_TOKEN = '[REDACTED]'", 'API_TOKEN = os.environ["API_TOKEN"]')
+        self.assertIn('+API_TOKEN = os.environ["API_TOKEN"]', context.proposed_diff("app.py", snippet, replacement))
+
+    def test_diff_handles_source_without_trailing_newline(self):
+        (self.root / "end.py").write_text("def render_note(title):\n    return title")
+        context = Context(self.root, ["end.py"])
+        diff = context.proposed_diff("end.py", context.excerpt("end.py", 2),
+                                     "def render_note(title):\n    from html import escape\n    return escape(title)\n")
+        self.assertIn("-    return title\n\\ No newline at end of file\n", diff)

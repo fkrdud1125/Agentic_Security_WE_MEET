@@ -144,14 +144,16 @@ class Context:
         size = 0
         # Spread the budget over input/database/route/import evidence, not just imports.
         for kind in ("input", "database", "route_or_guard", "import"):
+            selected = 0
             for point in (p for p in self.points if p["kind"] == kind):
-                if len(excerpts) >= 12:
-                    return excerpts
+                if selected >= 3:
+                    break
                 item = self.excerpt(point["file"], point["line"])
                 if item and size + len(item["code"]) <= 24000:
                     excerpts.append({"id": point["id"], "kind": kind,
                                      "file": self.aliases[point["file"]], **item})
                     size += len(item["code"])
+                    selected += 1
         return excerpts
 
     def proposed_diff(self, name, excerpt, replacement):
@@ -168,6 +170,7 @@ class Context:
         _, hidden = sanitize(replacement if not replacement.startswith((" ", "\t")) else "if True:\n" + replacement)
         if any(v != REDACTED for v in hidden):
             raise ValueError("수정 코드에 인증정보 리터럴이 포함되어 있습니다.")
-        return "".join(difflib.unified_diff(self.sources[name].splitlines(keepends=True),
-                                           patched.splitlines(keepends=True),
-                                           fromfile="a/" + name, tofile="b/" + name))
+        diff = difflib.unified_diff(self.sources[name].splitlines(keepends=True),
+                                    patched.splitlines(keepends=True),
+                                    fromfile="a/" + name, tofile="b/" + name)
+        return "".join(line if line.endswith("\n") else line + "\n\\ No newline at end of file\n" for line in diff)

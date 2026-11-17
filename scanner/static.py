@@ -50,8 +50,21 @@ def sensitive_literals(tree):
             values.extend(v for k, v in zip(node.keys, node.values)
                           if isinstance(k, ast.Constant) and isinstance(k.value, str) and SENSITIVE.search(k.value))
         for value in values:
-            literals.extend(n for n in ast.walk(value) if isinstance(n, ast.JoinedStr)
-                            or isinstance(n, ast.Constant) and isinstance(n.value, str))
+            pending = [value]
+            while pending:
+                candidate = pending.pop()
+                if isinstance(candidate, ast.Constant) and isinstance(candidate.value, str):
+                    literals.append(candidate)
+                elif isinstance(candidate, ast.JoinedStr):
+                    literals.append(candidate)
+                    pending.extend(candidate.values)
+                elif isinstance(candidate, (ast.BinOp, ast.Tuple, ast.List)):
+                    pending.extend(ast.iter_child_nodes(candidate))
+                elif (isinstance(candidate, ast.Call) and isinstance(candidate.func, ast.Attribute)
+                      and (candidate.func.attr == "getenv" or
+                           candidate.func.attr == "get" and ast.unparse(candidate.func.value).endswith("environ"))):
+                    pending.extend(candidate.args[1:2])
+                    pending.extend(k.value for k in candidate.keywords if k.arg == "default")
     return literals
 
 
