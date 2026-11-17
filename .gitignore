@@ -8,3 +8,4 @@ __pycache__/
 /report.md
 /artifacts/
 /scan-history.sqlite3*
+/semgrep-sample.local.json

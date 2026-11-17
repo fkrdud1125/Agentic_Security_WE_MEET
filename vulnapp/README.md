@@ -21,6 +21,32 @@ SQL과 HTML 표본은 정적 검사 대상입니다. HTTP 입력에서 해당 �
 
 ## 동작 확인
 
+### Semgrep으로 정적 표본 확인
+
+저장소 루트에서 다음 순서로 실행합니다. 규칙은 저장소의 `rules/sample.yml`을 사용합니다.
+
+```sh
+python -m pip install semgrep==1.185.0
+semgrep scan --metrics=off --disable-version-check --no-rewrite-rule-ids --config rules/sample.yml --json-output=semgrep-sample.local.json vulnapp
+python tests/verify_semgrep_sample.py semgrep-sample.local.json
+```
+
+기준 실행에서는 `app.py:8`의 토큰 대입, `static_cases.py:8`의 SQL 실행, `static_cases.py:12`의 마크업 변환을 각각 한 건씩 탐지했습니다. 이 세 규칙은 샘플의 정적 패턴을 확인합니다. 아래 Flask 테스트는 익명 접근과 실제 응답 헤더·쿠키를 확인합니다.
+
+### 독립 Git 저장소로 사용
+
+커밋 비교를 연습하려면 WE_MEET 루트에서 PowerShell로 다음 명령을 실행합니다. 대상은 새 폴더여야 합니다. 첫 커밋을 기준으로 샘플 코드를 수정하고 변경 이력을 쌓을 수 있습니다.
+
+```powershell
+$sample = New-Item -ItemType Directory ../vulnapp-repo -ErrorAction Stop
+Copy-Item -LiteralPath vulnapp/app.py,vulnapp/static_cases.py,vulnapp/requirements.txt -Destination $sample.FullName
+git -C $sample.FullName init -b main
+git -C $sample.FullName add -- app.py static_cases.py requirements.txt
+git -C $sample.FullName -c user.name=VibeScan -c user.email=fixture@example.invalid commit -m "fix:(로컬 진단 기준 샘플 앱 추가)"
+```
+
+### Flask 테스트
+
 ```sh
 python -m unittest discover -s tests -p test_vulnapp.py -v
 ```

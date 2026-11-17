@@ -56,8 +56,8 @@ python -m vibescan.register
 ## v6 기반 작업 진행 상황
 
 - [x] ChatGPT 클라이언트 등록 명령 구현 및 콜백 처리 테스트
-- [ ] 실제 계정 동의 및 클라이언트 ID 발급 확인
+- [x] 실제 설치에서 ChatGPT 클라이언트 등록 완료 (사용자 확인)
 - [x] 저장소 구조 및 기본 Finding / ScanResult 데이터 모델
 - [x] 커밋·기준 커밋·발견 변화량 필드 및 SQLite 스캔 이력 스키마
 - [x] 로컬 Flask 샘플 앱 구성
-- [ ] Semgrep 실행 및 JSON 결과 파싱 확인
+- [x] Semgrep 실행 및 JSON 결과 파싱 확인 ([원본 결과](tests/fixtures/semgrep-sample.json) · [실행 기록](https://github.com/jubin0615/WE_MEET/actions/runs/44067063217))

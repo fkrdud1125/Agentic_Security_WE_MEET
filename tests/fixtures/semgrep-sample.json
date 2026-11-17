@@ -1,0 +1,154 @@
+{
+  "version": "1.185.0",
+  "results": [
+    {
+      "check_id": "literal-token",
+      "path": "vulnapp/app.py",
+      "start": {
+        "line": 8,
+        "col": 1,
+        "offset": 220
+      },
+      "end": {
+        "line": 8,
+        "col": 52,
+        "offset": 271
+      },
+      "extra": {
+        "message": "토큰 이름의 변수에 문자열이 직접 지정됐습니다.",
+        "metadata": {},
+        "severity": "WARNING",
+        "fingerprint": "requires login",
+        "lines": "requires login",
+        "validation_state": "NO_VALIDATOR",
+        "engine_kind": "OSS"
+      }
+    },
+    {
+      "check_id": "concatenated-select",
+      "path": "vulnapp/static_cases.py",
+      "start": {
+        "line": 8,
+        "col": 12,
+        "offset": 235
+      },
+      "end": {
+        "line": 8,
+        "col": 37,
+        "offset": 260
+      },
+      "extra": {
+        "message": "문자열로 조합한 SELECT를 실행합니다. 파라미터 바인딩을 확인하세요.",
+        "metadata": {},
+        "severity": "WARNING",
+        "fingerprint": "requires login",
+        "lines": "requires login",
+        "validation_state": "NO_VALIDATOR",
+        "engine_kind": "OSS"
+      }
+    },
+    {
+      "check_id": "unescaped-markup",
+      "path": "vulnapp/static_cases.py",
+      "start": {
+        "line": 12,
+        "col": 12,
+        "offset": 309
+      },
+      "end": {
+        "line": 12,
+        "col": 25,
+        "offset": 322
+      },
+      "extra": {
+        "message": "함수 인자를 HTML 마크업으로 신뢰합니다. 입력 출처를 확인하세요.",
+        "metadata": {},
+        "severity": "WARNING",
+        "fingerprint": "requires login",
+        "lines": "requires login",
+        "validation_state": "NO_VALIDATOR",
+        "engine_kind": "OSS"
+      }
+    }
+  ],
+  "errors": [],
+  "paths": {
+    "scanned": [
+      "vulnapp/app.py",
+      "vulnapp/static_cases.py"
+    ]
+  },
+  "time": {
+    "rules": [],
+    "rules_parse_time": 0.0004761219024658203,
+    "profiling_times": {
+      "config_time": 0.09615969657897949,
+      "core_time": 0.24320101737976074,
+      "ignores_time": 0.00007510185241699219,
+      "total_time": 0.347947359085083
+    },
+    "parsing_time": {
+      "total_time": 0.02142810821533203,
+      "per_file_time": {
+        "mean": 0.005357027053833008,
+        "std_dev": 0.000029644126527728076
+      },
+      "very_slow_stats": {
+        "time_ratio": 0,
+        "count_ratio": 0
+      },
+      "very_slow_files": []
+    },
+    "scanning_time": {
+      "total_time": 0.03319406509399414,
+      "per_file_time": {
+        "mean": 0.01659703254699707,
+        "std_dev": 0.0000048175045321841026
+      },
+      "very_slow_stats": {
+        "time_ratio": 0,
+        "count_ratio": 0
+      },
+      "very_slow_files": []
+    },
+    "matching_time": {
+      "total_time": 0.01103973388671875,
+      "per_file_and_rule_time": {
+        "mean": 0.0027599334716796875,
+        "std_dev": 0.00000762813309052035
+      },
+      "very_slow_stats": {
+        "time_ratio": 0,
+        "count_ratio": 0
+      },
+      "very_slow_rules_on_files": []
+    },
+    "tainting_time": {
+      "total_time": 0,
+      "per_def_and_rule_time": {
+        "mean": 0,
+        "std_dev": 0
+      },
+      "very_slow_stats": {
+        "time_ratio": 0,
+        "count_ratio": 0
+      },
+      "very_slow_rules_on_defs": []
+    },
+    "fixpoint_timeouts": [],
+    "prefiltering": {
+      "project_level_time": 0,
+      "file_level_time": 0,
+      "rules_with_project_prefilters_ratio": 0,
+      "rules_with_file_prefilters_ratio": 0.6666666666666666,
+      "rules_selected_ratio": 0.6666666666666666,
+      "rules_matched_ratio": 0.6666666666666666
+    },
+    "targets": [],
+    "total_bytes": 0,
+    "max_memory_bytes": 94196096
+  },
+  "engine_requested": "OSS",
+  "skipped_rules": [],
+  "profiling_results": []
+}

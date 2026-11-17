@@ -1,0 +1,31 @@
+rules:
+  - id: literal-token
+    languages: [python]
+    severity: WARNING
+    message: 토큰 이름의 변수에 문자열이 직접 지정됐습니다.
+    patterns:
+      - pattern: $NAME = "..."
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: '^[A-Z_]*(API_KEY|TOKEN|SECRET)$'
+  - id: concatenated-select
+    languages: [python]
+    severity: WARNING
+    message: 문자열로 조합한 SELECT를 실행합니다. 파라미터 바인딩을 확인하세요.
+    patterns:
+      - pattern-inside: |
+          $QUERY = $PREFIX + $INPUT + $SUFFIX
+          ...
+      - metavariable-regex:
+          metavariable: $PREFIX
+          regex: '(?i)^["\x27]select\s'
+      - pattern: $DB.execute($QUERY)
+  - id: unescaped-markup
+    languages: [python]
+    severity: WARNING
+    message: 함수 인자를 HTML 마크업으로 신뢰합니다. 입력 출처를 확인하세요.
+    patterns:
+      - pattern-inside: |
+          def $FUNC(..., $ARG, ...):
+              ...
+      - pattern: markupsafe.Markup($ARG)
