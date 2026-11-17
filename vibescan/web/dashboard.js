@@ -18,6 +18,7 @@ function node(tag, text, className) {
   return item;
 }
 function badge(level) { return node("span", level, "badge " + (levels.includes(level) ? level : "Info")); }
+function findingStatus(f) { return f.change === "fixed" ? "fixed" : f.status; }
 function message(text, error = false) {
   $("message").textContent = text;
   $("message").classList.toggle("error", error);
@@ -39,7 +40,7 @@ function sortedFindings() {
 function showDetail(f) {
   $("detail-badge").replaceChildren(badge(f.severity));
   $("detail-title").textContent = f.title;
-  $("detail-meta").textContent = `${locationText(f)} · ${f.cwe} · ${f.owasp} · ${f.confidence} · ${statuses[f.status]} · 최초 심각도 ${f.original_severity || f.severity}`;
+  $("detail-meta").textContent = `${locationText(f)} · ${f.cwe} · ${f.owasp} · ${f.confidence} · ${statuses[findingStatus(f)]} · 최초 심각도 ${f.original_severity || f.severity}`;
   $("evidence").textContent = f.evidence || "근거 없음";
   $("how-found").textContent = f.how_found.join(" · ");
   $("impact").textContent = f.impact_ko || "영향 설명 없음";
@@ -65,7 +66,7 @@ function filterFindings() {
   if (!result) return;
   const severity = $("severity-filter").value, status = $("status-filter").value;
   const search = $("search").value.toLocaleLowerCase();
-  const findings = sortedFindings().filter(f => (!severity || f.severity === severity) && (!status || f.status === status) &&
+  const findings = sortedFindings().filter(f => (!severity || f.severity === severity) && (!status || findingStatus(f) === status) &&
     `${f.title} ${f.location.file || ""} ${f.cwe} ${f.owasp}`.toLocaleLowerCase().includes(search));
   $("findings").replaceChildren();
   $("filtered-count").textContent = `${findings.length}건`;
@@ -74,7 +75,7 @@ function filterFindings() {
     const row = node("tr", ""), severityCell = node("td", ""), name = node("td", "");
     severityCell.append(badge(f.severity));
     name.append(findingButton(f), node("p", locationText(f), "muted"));
-    row.append(severityCell, name, node("td", statuses[f.status] || f.status), node("td", f.confidence), node("td", changes[f.change] || "비교 전"));
+    row.append(severityCell, name, node("td", statuses[findingStatus(f)] || f.status), node("td", f.confidence), node("td", changes[f.change] || "비교 전"));
     $("findings").append(row);
   }
 }
@@ -104,7 +105,7 @@ function render() {
   if (!d.coverage.length) $("coverage").append(node("li", "이 결과에는 검사 범위 기록이 없습니다."));
   $("limitations").replaceChildren(...d.profile.limitations.map(text => node("li", text)));
   $("priorities").replaceChildren();
-  const priorities = sortedFindings().filter(f => f.status === "open" && f.change !== "fixed").slice(0, 3);
+  const priorities = sortedFindings().filter(f => findingStatus(f) === "open").slice(0, 3);
   for (const f of priorities) {
     const row = node("div", "", "priority"), text = node("div", "");
     text.append(findingButton(f), node("p", locationText(f), "muted"));

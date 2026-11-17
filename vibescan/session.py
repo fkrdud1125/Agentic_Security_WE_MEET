@@ -80,9 +80,12 @@ class InvalidGrant(SessionError):
 
 
 def checked_identity(raw, client, nonce=None):
-    key = JWKS.get_signing_key_from_jwt(raw).key
-    claims = jwt.decode(raw, key, algorithms=["RS256"], issuer=ISSUER, audience=client,
-                        options={"require": ["sub", "exp", "iat"]})
+    try:
+        key = JWKS.get_signing_key_from_jwt(raw).key
+        claims = jwt.decode(raw, key, algorithms=["RS256"], issuer=ISSUER, audience=client,
+                            options={"require": ["sub", "exp", "iat"]})
+    except jwt.PyJWTError:
+        raise SessionError("계정 검증에 실패했습니다. vibescan login 으로 다시 연결하세요.") from None
     if nonce is not None and claims.get("nonce") != nonce:
         raise SessionError("로그인 응답의 nonce가 일치하지 않습니다.")
     return claims["sub"]

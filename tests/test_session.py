@@ -124,6 +124,7 @@ class SessionTests(unittest.TestCase):
             self.assertEqual(session.access_token(self.directory), "next")
             self.assertEqual(session.access_token(self.directory), "next")
             self.assertEqual(refresh.call_count, 1)
+
         with session.transaction(self.directory) as db:
             data = session.read_record(db, "issued")
             self.assertEqual(data["refresh_token"], "two")
@@ -134,3 +135,29 @@ class SessionTests(unittest.TestCase):
                 with self.assertRaises(session.SessionError):
                     session.access_token(self.directory)
             self.assertEqual(refresh.call_count, 1)
+
+    def test_refresh_identity_failure_keeps_static_scan_available(self):
+        record = {"sub": "subject", "scope": session.PLAN, "access_token": "old",
+                  "refresh_token": "refresh", "id_token": None, "expires_at": 0}
+        with session.transaction(self.directory) as db:
+            session.save(db, "issued", record)
+        repo = self.directory / "repo"
+        repo.mkdir()
+
+        def snapshot(repo, destination):
+            (destination / "app.py").write_text('API_TOKEN = "fixture-secret-value"\n')
+            return "test-commit", "main", ["app.py"]
+
+        for invalid in (self.identity(issuer="wrong"), "malformed-token"):
+            with self.subTest(token=invalid[:12]), patch.object(session, "token_request", return_value={
+                    "id_token": invalid, "access_token": "rejected", "expires_in": 3600}), \
+                 patch.object(cli, "snapshot", side_effect=snapshot), \
+                 patch("scanner.static.semgrep", return_value=[]), \
+                 patch.object(inference, "request") as remote:
+                folder, note = cli.scan(repo, self.directory / "out", self.directory)
+                remote.assert_not_called()
+                self.assertIn("계정 검증에 실패", note)
+                result = ScanResult.from_json((folder / "scan_result.json").read_text(encoding="utf-8"))
+                self.assertEqual(len(result.findings), 1)
+                with session.transaction(self.directory) as db:
+                    self.assertEqual(session.read_record(db, "issued"), record)

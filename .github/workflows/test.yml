@@ -1,7 +1,6 @@
 name: CLI and analysis tests
 on:
   push:
-    branches: [main, verify/sprint1-completion]
   pull_request:
 permissions:
   contents: read
@@ -22,6 +21,7 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install . -r vulnapp/requirements.txt httpx
       - run: python -m unittest discover -s tests -v
+      - run: node tests/test_dashboard_ui.cjs
       - name: Installed CLI outside repository
         shell: python
         run: |
