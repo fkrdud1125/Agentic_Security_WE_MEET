@@ -94,7 +94,16 @@ class ScanInputError(ValueError):
     """A scan the user can fix; its message is safe to show in the dashboard."""
 
 
-def scan(repo, output, directory, offline=False, trigger=Trigger.MANUAL):
+STAGES = ["코드 수집", "정찰", "점검 계획", "정적 검사", "검토·보고서"]
+
+
+def scan(repo, output, directory, offline=False, trigger=Trigger.MANUAL, progress=lambda stage, text: None,
+         new_high_only=False):
+    """progress(stage, text) reports STAGES[stage] and one log line; text never carries source code.
+
+    new_high_only (background scans with consent): skip the model plan and send only findings that are
+    new since the previous scan and High or above, to spare the user's ChatGPT quota.
+    """
     repo = repo.expanduser().resolve()
     output = output.expanduser().resolve()
     if output.is_relative_to(repo) or directory.resolve().is_relative_to(repo):
@@ -104,33 +113,50 @@ def scan(repo, output, directory, offline=False, trigger=Trigger.MANUAL):
     note = "로컬 규칙으로 작성"
     issue = None  # first model problem, so the dashboard can point to its fix
     active = None
+    progress(0, "커밋된 파일을 읽기 전용 사본으로 수집하는 중")
     with tempfile.TemporaryDirectory() as temp:
         source = Path(temp)
         commit, branch, files = snapshot(repo, source)
+        progress(0, f"파일 {len(files)}개 수집 · 커밋 {commit[:12]}")
         if not files and not getattr(files, "sensitive_files", []):
             raise ScanInputError("제외 규칙 적용 후 검사 가능한 텍스트 파일이 없습니다.")
         app = profile(source, files)
+        progress(1, f"정찰 완료 · {app.framework or '프레임워크 미확인'} · 라우트 {app.routes}개")
         context = Context(source, files)
         app.limitations = ["Python·JS/TS·템플릿의 제한된 정적 규칙 검사입니다. 함수 간 흐름과 동적 검사는 확인하지 않았습니다."]
+        progress(2, "기본 점검 계획 사용" if offline or new_high_only else "ChatGPT에 점검 계획 요청 중")
         if not offline:
             try:
                 token = access_token(directory)
                 model = inference.model_for(token)
                 active = token, model
-                coverage = analysis.plan(context, app, *active)
-                note = "코드 문맥 기반 정찰·점검 계획 적용"
+                if not new_high_only:
+                    coverage = analysis.plan(context, app, *active)
+                    note = "코드 문맥 기반 정찰·점검 계획 적용"
             except SessionError as exc:
                 active = None
                 note, issue = f"로컬 규칙으로 작성 · {exc}", exc.kind
             except (OSError, ValueError, KeyError, TypeError, sqlite3.Error, requests.RequestException):
                 note, issue = "모델 정찰·계획 확인 실패 · 고정 점검 계획 적용", "error"
+            progress(2, note)
+        progress(3, "정적 규칙·시크릿·설정 검사 중")
         findings = inspect(source, files)
+        progress(3, f"발견 후보 {len(findings)}건")
         findings.sort(key=lambda f: (list(Severity).index(f.severity), f.confidence != "Likely", f.id))
-        if active and findings:
+        partial = getattr(findings, 'partial_files', [])
+        # Compare before the model review, so a background scan can send only what this commit introduced.
+        progress(4, "직전 스캔과 비교하는 중")
+        previous = baseline(directory / "scan-history.sqlite3", repo, output)
+        matched = compare(findings, previous, commit, partial) if previous else None
+        kept, gone = matched or ([], [])
+        targets = [f for f in findings if not new_high_only or
+                   (f.change == Change.NEW and f.severity in (Severity.CRITICAL, Severity.HIGH))]
+        if active and targets:
             count = 0
-            for start in range(0, min(len(findings), 30), 5):
+            for start in range(0, min(len(targets), 30), 5):
+                progress(4, f"ChatGPT 검토 중 {start}/{min(len(targets), 30)}건")
                 try:
-                    count += analysis.review(context, findings[start:start + 5], *active)
+                    count += analysis.review(context, targets[start:start + 5], *active)
                 except SessionError as exc:
                     note += f" · 남은 검토는 로컬 수정안 사용 ({exc})"
                     issue = exc.kind
@@ -139,16 +165,15 @@ def scan(repo, output, directory, offline=False, trigger=Trigger.MANUAL):
                     note += " · 모델 검토 확인 실패 · 남은 항목은 로컬 수정안 사용"
                     issue = "error"
                     break
-            note += f" · 한국어 상세 검토 {count}/{len(findings)}건"
-            if len(findings) > 30:
+            note += f" · 한국어 상세 검토 {count}/{len(targets)}건" + (" (새 High 이상만)" if new_high_only else "")
+            if len(targets) > 30:
                 note += " · 모델 검토 상한 30건, 나머지는 로컬 규칙 결과"
+        elif active:
+            note += " · 새로 생긴 High 이상 발견이 없어 ChatGPT 검토 생략" if new_high_only else ""
 
     weights = {Severity.CRITICAL: 40, Severity.HIGH: 20, Severity.MEDIUM: 10,
                Severity.LOW: 3, Severity.INFO: 0}
-    partial = getattr(findings, 'partial_files', [])
-    previous = baseline(directory / "scan-history.sqlite3", repo, output)
-    matched = compare(findings, previous, commit, partial) if previous else None
-    kept, gone = matched or ([], [])
+    progress(4, "보고서 저장 중")
     current = list(findings) + kept
     for number, f in enumerate(kept + gone, len(findings) + 1):
         f.id = f"F-{number:03}"

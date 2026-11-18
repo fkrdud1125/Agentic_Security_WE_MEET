@@ -180,3 +180,29 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(issue, "error")
         self.assertIn("1/1", note)
         self.assertEqual(len(json.loads((folder / "scan_result.json").read_text(encoding="utf-8"))["coverage"]), 5)
+
+    def test_background_review_sends_only_new_high_findings_and_reports_progress(self):
+        out, state = self.base / "out", self.base / "state"
+        with patch("scanner.static.semgrep", return_value=[]):
+            cli.scan(self.repo, out, state, offline=True)
+            (self.repo / "app.py").write_text('API_TOKEN = "private-value-1234"\nSECOND_KEY = "private-value-5678"\n')
+            self.git("add", "app.py")
+            self.git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false",
+                     "commit", "-qm", "second secret")
+            steps = []
+            with patch.object(cli, "access_token", return_value="t"), \
+                    patch.object(inference, "model_for", return_value="m"), \
+                    patch.object(cli.analysis, "plan") as plan, \
+                    patch.object(cli.analysis, "review", side_effect=lambda ctx, batch, *a: len(batch)) as review:
+                folder, note, _ = cli.scan(self.repo, out, state, new_high_only=True,
+                                           progress=lambda stage, text: steps.append((stage, text)))
+        plan.assert_not_called()  # background scans spare the quota: no planning call
+        sent = [f for call in review.call_args_list for f in call.args[1]]
+        self.assertTrue(sent)
+        self.assertTrue(all(f.change == "new" and f.severity in ("Critical", "High") for f in sent))
+        data = json.loads((folder / "scan_result.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(sent), sum(f["change"] == "new" for f in data["findings"]))
+        self.assertIn("새 High 이상만", note)
+        self.assertEqual(sorted({stage for stage, _ in steps}), [0, 1, 2, 3, 4])
+        self.assertEqual([stage for stage, _ in steps], sorted(stage for stage, _ in steps))
+        self.assertNotIn("private-value", json.dumps(steps, ensure_ascii=False))

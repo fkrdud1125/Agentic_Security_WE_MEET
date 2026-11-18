@@ -1,6 +1,7 @@
 """Loopback dashboard for saved results and explicit local repository scans."""
 
 import asyncio
+import json
 import os
 import re
 import secrets
@@ -9,6 +10,7 @@ import socket
 import sqlite3
 import subprocess
 import threading
+import time
 import webbrowser
 from contextlib import asynccontextmanager, closing
 from datetime import timezone
@@ -22,7 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from scanner.ingest import git
 from scanner.models import ScanResult
 from . import hook
-from .cli import ScanInputError, scan
+from .cli import STAGES, ScanInputError, scan
 from .login import login
 from .register import data_dir
 from .session import logout, status
@@ -48,6 +50,11 @@ class ScanInput(RepoInput):
 
 class HookInput(RepoInput):
     enabled: bool = Field(strict=True)
+
+
+class SettingsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    background_llm: bool = Field(strict=True)
 
 
 def dashboard_app(results: Path, address: str, ticket: str, directory: Path | None = None):
@@ -193,8 +200,12 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
                 job = {"state": "failed", "repo": repo, "message": "GitHub에서 최신 커밋을 가져오지 못했습니다. "
                        "네트워크와 저장소 접근 권한을 확인하세요. 기존 결과는 유지됩니다."}
             return
+        def report(stage, text):
+            with lock:
+                job.update(stage=stage, log=(job.get("log", []) + [text])[-30:])
+
         try:
-            folder, note, issue = scan(Path(repo), root, directory, offline=offline)
+            folder, note, issue = scan(Path(repo), root, directory, offline=offline, progress=report)
             completed = {"state": "completed", "repo": repo, "scan_id": folder.name, "message": note, "issue": issue}
         except subprocess.TimeoutExpired:
             completed = {"state": "failed", "repo": repo, "message": "검사 시간이 초과되었습니다. 기존 결과는 유지됩니다."}
@@ -205,7 +216,7 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
             completed = {"state": "failed", "repo": repo,
                          "message": "스캔에 실패했습니다. Git 저장소·Semgrep 설치·저장 경로를 확인하세요. 기존 결과는 유지됩니다."}
         with lock:
-            job = completed
+            job = completed | {"log": job.get("log", [])}
 
     @app.post("/api/scan", status_code=202)
     def start_scan(body: ScanInput):
@@ -220,7 +231,7 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
                     raise HTTPException(404, "먼저 레포를 연결하세요.")
             except (OSError, sqlite3.Error):
                 raise HTTPException(503, "레포 연결 정보를 읽을 수 없습니다.") from None
-            job = {"state": "running", "repo": repo["path"], "offline": body.offline}
+            job = {"state": "running", "repo": repo["path"], "offline": body.offline, "stage": 0, "log": []}
             worker = threading.Thread(target=run_scan, args=(repo["path"], body.offline))
             try:
                 worker.start()
@@ -233,7 +244,30 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
     @app.get("/api/scan")
     def scan_status():
         with lock:
-            return dict(job)
+            state = dict(job)
+        return state | {"stages": STAGES, "hook": live_hook()}
+
+    def live_hook():
+        """A commit hook's scan in progress, written by that background process."""
+        try:
+            data = json.loads((directory / "live.json").read_text(encoding="utf-8"))
+            # A crashed hook leaves its file behind; ten quiet minutes means it is gone.
+            if time.time() - data.get("updated", data["started"]) < 600 and data["repo"] in connected():
+                return {key: data[key] for key in ("repo", "commit", "stage", "log")}
+        except (OSError, ValueError, KeyError, TypeError, sqlite3.Error):
+            pass
+        return None
+
+    @app.get("/api/settings")
+    def get_settings():
+        return hook.settings(directory)
+
+    @app.post("/api/settings")
+    def set_settings(body: SettingsInput):
+        try:
+            return hook.save_settings(directory, background_llm=body.background_llm)
+        except OSError:
+            raise HTTPException(503, "설정을 저장할 수 없습니다.") from None
 
     def run_login():
         nonlocal sign_in

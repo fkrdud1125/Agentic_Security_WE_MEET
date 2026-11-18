@@ -9,6 +9,15 @@
 #job-message{color:#176e63;overflow-wrap:anywhere}
 #job-message.error,#auth-status.error{color:#a23c31}
 /* Risk trend: past scans recede in gray, the scan on screen is the accent dot. */
+/* Scan progress: finished steps teal, the running step outlined, later steps gray. */
+.progress{margin-top:14px;padding:14px 16px;border:1px solid #d5e5e2;border-radius:10px;background:#f7fbfa}
+.progress p{margin:0 0 10px;font-weight:600}
+#progress-steps{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px;padding:0;list-style:none;counter-reset:step}
+#progress-steps li{flex:1 1 110px;padding:6px 10px;border-radius:999px;background:#e9eef2;color:#586777;font-size:12px;counter-increment:step}
+#progress-steps li::before{content:counter(step) '. '}
+#progress-steps li.done{background:#d9f0ec;color:#176e63}
+#progress-steps li.current{background:#fff;color:#0b5f5a;box-shadow:inset 0 0 0 2px #087e7d;font-weight:700}
+#activity{margin:0;padding-left:18px;max-height:150px;overflow:auto;font-size:12px}
 .sparkline{display:block;width:100%;height:40px;margin-top:10px;overflow:visible}
 .sparkline .line{fill:none;stroke:#a3afba;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
 .sparkline .dot{fill:#a3afba}.sparkline .now{fill:#087e7d;stroke:#fff;stroke-width:2}.sparkline .hit{fill:transparent;cursor:default}

@@ -7,7 +7,7 @@ import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from fastapi.testclient import TestClient
 
@@ -233,7 +233,7 @@ class DashboardTests(unittest.TestCase):
             job = self.wait_scan()
             self.assertEqual(job["state"], "failed")
             self.assertNotIn("PRIVATE", json.dumps(job))
-            engine.assert_called_once_with(repo.resolve(), self.root.resolve(), self.directory.resolve(), offline=False)
+            engine.assert_called_once_with(repo.resolve(), self.root.resolve(), self.directory.resolve(), offline=False, progress=ANY)
         self.assertEqual(old.read_bytes(), before)
         with patch("vibescan.dashboard.scan", return_value=(old.parent, "quota reached", "limit")):
             self.assertEqual(self.client.post("/api/scan", headers=self.headers, json={"path": str(repo)}).status_code, 202)
@@ -388,3 +388,43 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/latest", headers=self.headers).json(), {"scan_id": None})
         self.save(sample())
         self.assertEqual(self.client.get("/api/latest", headers=self.headers).json(), {"scan_id": "scan-1"})
+
+    def test_scan_progress_hook_live_state_and_background_consent(self):
+        repo = self.repository()
+        self.client.post("/api/repos", headers=self.headers, json={"path": str(repo)})
+        release = threading.Event()
+
+        def slow(*args, progress, **kwargs):
+            progress(0, "파일 1개 수집")
+            progress(3, "발견 후보 1건")
+            release.wait(5)
+            raise RuntimeError("stop")
+
+        with patch("vibescan.dashboard.scan", side_effect=slow):
+            try:
+                self.client.post("/api/scan", headers=self.headers, json={"path": str(repo)})
+                deadline = time.monotonic() + 5
+                while self.client.get("/api/scan", headers=self.headers).json().get("stage") != 3:
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(0.02)
+                job = self.client.get("/api/scan", headers=self.headers).json()
+                self.assertEqual(job["log"], ["파일 1개 수집", "발견 후보 1건"])
+                self.assertEqual(len(job["stages"]), 5)
+            finally:
+                release.set()
+            self.assertEqual(self.wait_scan()["log"], ["파일 1개 수집", "발견 후보 1건"])  # kept after it ends
+
+        live = self.directory / "live.json"
+        state = {"repo": str(repo.resolve()), "commit": "c" * 40, "stage": 2, "log": ["x"], "started": time.time()}
+        live.write_text(json.dumps(state), encoding="utf-8")
+        self.assertEqual(self.client.get("/api/scan", headers=self.headers).json()["hook"]["stage"], 2)
+        live.write_text(json.dumps(state | {"started": time.time() - 3600}), encoding="utf-8")
+        self.assertIsNone(self.client.get("/api/scan", headers=self.headers).json()["hook"])  # crashed hook
+        live.write_text(json.dumps(state | {"repo": "C:/not-connected"}), encoding="utf-8")
+        self.assertIsNone(self.client.get("/api/scan", headers=self.headers).json()["hook"])
+
+        self.assertEqual(self.client.get("/api/settings", headers=self.headers).json(), {"background_llm": False})
+        self.assertEqual(self.client.post("/api/settings", json={"background_llm": True}).status_code, 403)
+        self.assertEqual(self.client.post("/api/settings", headers=self.headers, json={"background_llm": "yes"}).status_code, 422)
+        self.client.post("/api/settings", headers=self.headers, json={"background_llm": True})
+        self.assertEqual(self.client.get("/api/settings", headers=self.headers).json(), {"background_llm": True})

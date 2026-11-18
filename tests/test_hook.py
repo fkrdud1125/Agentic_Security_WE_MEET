@@ -7,7 +7,7 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from scanner.models import Trigger
 from vibescan import hook
@@ -66,7 +66,8 @@ class HookTests(unittest.TestCase):
             self.assertIsNone(hook.trigger(self.repo, "an-older-commit", state, wait=0))  # a newer hook will scan
             scan.assert_not_called()
             hook.trigger(self.repo, self.head, state, wait=0)
-            scan.assert_called_once_with(self.repo.resolve(), state / "scans", state, offline=True, trigger=Trigger.GIT_HOOK)
+            scan.assert_called_once_with(self.repo.resolve(), state / "scans", state, offline=True,
+                                         trigger=Trigger.GIT_HOOK, progress=ANY, new_high_only=False)
         with patch("vibescan.cli.scan", side_effect=ValueError("검사 실패 사유")):
             hook.trigger(self.repo, self.head, state, wait=0)
         self.assertIn("검사 실패 사유", (state / "hook.log").read_text(encoding="utf-8"))
@@ -90,3 +91,21 @@ class HookTests(unittest.TestCase):
         data = json.loads(results[0].read_text(encoding="utf-8"))
         self.assertEqual((data["commit"], data["trigger"]), (head, "git-hook"))
         self.assertNotIn("test-credential-", json.dumps(data))
+
+    def test_trigger_follows_consent_and_clears_its_live_progress(self):
+        state = self.base / "state"
+        self.connect(state)
+        seen = []
+
+        def fake(*args, progress, **kwargs):
+            progress(3, "발견 후보 1건")
+            seen.append((kwargs, json.loads((state / "live.json").read_text(encoding="utf-8"))))
+            return state / "scans/x", "", None
+
+        hook.save_settings(state, background_llm=True)
+        with patch("vibescan.cli.scan", side_effect=fake):
+            hook.trigger(self.repo, self.head, state, wait=0)
+        kwargs, live = seen[0]
+        self.assertEqual((kwargs["offline"], kwargs["new_high_only"]), (False, True))
+        self.assertEqual((live["stage"], live["log"], live["commit"]), (3, ["발견 후보 1건"], self.head))
+        self.assertFalse((state / "live.json").exists())

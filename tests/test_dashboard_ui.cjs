@@ -70,6 +70,24 @@ assert.equal(get('hook-toggle').disabled, true);
 assert.match(get('hook-toggle').textContent, /켜기/);
 console.log('Dashboard hook toggle states: OK');
 
+vm.runInContext(`stages = ['수집','정찰','계획','정적','검토']; renderProgress('repo', {stage: 2, log: ['a', 'b']});`, context);
+assert.equal(get('progress').hidden, false);
+assert.deepEqual(get('progress-steps').children.map(li => li.className || ''), ['done', 'done', 'current', '', '']);
+assert.deepEqual(get('activity').children.map(li => li.textContent), ['a', 'b']);
+vm.runInContext('renderProgress("", null)', context);
+assert.equal(get('progress').hidden, true);
+
+const shown = [];
+context.Notification = class { constructor(title, options) { shown.push(options.body); } };
+context.Notification.permission = 'granted';
+const high = (change, status = 'open') => ({change, status, severity: 'High', title: 'SQL 인젝션'});
+assert.equal(vm.runInContext(`alertNewRisks({commit: 'abc', findings: ${JSON.stringify([high('existing'), high('new', 'dismissed')])}})`, context), false);
+assert.deepEqual(shown, []);  // already-known and dismissed findings never alert
+assert.equal(vm.runInContext(`alertNewRisks({commit: 'abc', findings: ${JSON.stringify([high('new'), high('new')])}})`, context), true);
+assert.match(shown[0], /새 Critical\/High 2건: SQL 인젝션 외/);
+assert.match(get('job-message').textContent, /커밋 abc/);
+console.log('Dashboard progress stepper and new-risk alerts: OK');
+
 async function firstHookResult() {
   // The folder starts empty; the first result written by the commit hook must still open.
   const opened = [];

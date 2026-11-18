@@ -11,6 +11,7 @@ if (location.hash) {
 let result = null;
 let scanList = [];
 let repoList = [];
+let stages = [];
 let latestSeen;  // undefined until the first poll; null means the folder had no results
 let detailVersion = 0;
 let scanning = false;
@@ -217,6 +218,29 @@ function busy(running) {
   $("hook-toggle").hidden = !repo || repo.hook === null;  // null: GitHub clone, never committed to here
   $("hook-toggle").disabled = running;
   $("hook-toggle").textContent = repo?.hook ? "커밋 후 자동 스캔 끄기" : "커밋 후 자동 스캔 켜기";
+  $("notify").hidden = !repo?.hook || !("Notification" in globalThis) || Notification.permission !== "default";
+  $("background-llm").disabled = running || (auth?.state !== "ready" && !$("background-llm").checked);
+}
+function renderProgress(title, state) {
+  // state: {stage, log} from the dashboard's own scan or from a commit hook's live file; null hides it.
+  $("progress").hidden = !state;
+  if (!state) return;
+  $("progress-title").textContent = title;
+  $("progress-steps").replaceChildren(...stages.map((name, i) => {
+    const item = node("li", name, i < state.stage ? "done" : i === state.stage ? "current" : "");
+    if (i === state.stage) item.setAttribute("aria-current", "step");
+    return item;
+  }));
+  $("activity").replaceChildren(...(state.log || []).slice(-8).map(text => node("li", text)));
+}
+function alertNewRisks(scan) {
+  // Only what this commit introduced: existing findings never alert twice.
+  const fresh = scan.findings.filter(f => f.change === "new" && f.status === "open" && ["Critical", "High"].includes(f.severity));
+  if (!fresh.length) return false;
+  const text = `커밋 ${(scan.commit || "").slice(0, 12)}에서 새 Critical/High ${fresh.length}건: ${fresh[0].title}${fresh.length > 1 ? " 외" : ""}`;
+  jobMessage(text, true);
+  if ("Notification" in globalThis && Notification.permission === "granted") new Notification("VibeScan · 새 위험 발견", {body: text});
+  return true;
 }
 async function loadRepos(preferred = null) {
   const data = await api("/api/repos");
@@ -240,7 +264,9 @@ async function pollJob() {
   try {
     const job = await api("/api/scan");
     if (version !== jobVersion) return;
+    stages = job.stages || stages;
     busy(job.state === "running");
+    renderProgress(`${job.repo} · ${job.offline ? "정적 검사" : "정적 검사 및 ChatGPT 분석"}`, scanning ? job : null);
     if (scanning) {
       jobMessage(`${job.repo} · ${job.offline ? "정적 검사" : "정적 검사 및 ChatGPT 분석"} 진행 중입니다. 완료되면 결과가 자동으로 열립니다.`);
       pollTimer = setTimeout(pollJob, 1000);
@@ -305,6 +331,20 @@ $("logout").addEventListener("click", async () => {
   await loadAuth();
 });
 $("repo-select").addEventListener("change", () => busy(scanning));
+$("notify").addEventListener("click", async () => {
+  await Notification.requestPermission();
+  busy(scanning);
+});
+$("background-llm").addEventListener("change", async () => {
+  const wanted = $("background-llm").checked;
+  try {
+    const saved = await api("/api/settings", {background_llm: wanted});
+    $("background-llm").checked = saved.background_llm;
+    jobMessage(saved.background_llm ? "자동 스캔에서 새로 생긴 High 이상 발견만 ChatGPT로 검토합니다. 구독 사용량이 차감됩니다."
+      : "자동 스캔은 ChatGPT를 사용하지 않습니다.");
+  } catch (error) { $("background-llm").checked = !wanted; jobMessage(error.message, true); }
+  busy(scanning);
+});
 $("hook-toggle").addEventListener("click", async () => {
   const repo = repoList.find(r => r.path === $("repo-select").value);
   if (!repo) return;
@@ -319,14 +359,21 @@ $("hook-toggle").addEventListener("click", async () => {
 async function pollLatest() {
   // Results written by the commit hook appear without pressing anything.
   try {
+    const job = await api("/api/scan");
+    stages = job.stages || stages;
+    if (!scanning) {
+      const live = job.hook;
+      renderProgress(live ? `커밋 ${live.commit.slice(0, 12)} 자동 스캔 · ${live.repo}` : "", live);
+      if (live) jobMessage("커밋 후 자동 스캔이 진행 중입니다. 완료되면 결과가 자동으로 열립니다.");
+    }
     const {scan_id: id} = await api("/api/latest");
     if (id && latestSeen !== undefined && id !== latestSeen && !scanning && !scanList.some(s => s.scan_id === id)) {
       await refresh(id);
-      if (result?.scan_id === id) jobMessage(`커밋 ${(result.commit || "").slice(0, 12)}의 자동 스캔 결과가 도착했습니다.`);
+      if (result?.scan_id === id && !alertNewRisks(result)) jobMessage(`커밋 ${(result.commit || "").slice(0, 12)}의 자동 스캔 결과가 도착했습니다.`);
     }
     latestSeen = id;
   } catch { /* the next poll retries; manual refresh still works */ }
-  setTimeout(pollLatest, 10000);
+  setTimeout(pollLatest, 3000);
 }
 $("scan").addEventListener("click", async () => {
   ++jobVersion;
@@ -358,3 +405,4 @@ loadRepos().catch(error => jobMessage(error.message, true));
 loadAuth();
 pollJob();
 pollLatest();
+api("/api/settings").then(saved => { $("background-llm").checked = saved.background_llm; busy(scanning); }).catch(() => {});

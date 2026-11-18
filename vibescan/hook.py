@@ -1,5 +1,7 @@
 """git post-commit hook that rescans a connected repository in the background after each commit."""
 
+import json
+import os
 import shlex
 import sqlite3
 import subprocess
@@ -14,6 +16,29 @@ from scanner.models import Trigger
 
 MARKER = "# vibescan-hook"
 DEBOUNCE = 3  # seconds a hook waits so a burst of commits (rebase, amend) is scanned once, at its last commit
+
+
+def settings(directory):
+    """User choices for background scans; ChatGPT use stays off until the user turns it on."""
+    try:
+        saved = json.loads((directory / "settings.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        saved = {}
+    return {"background_llm": saved.get("background_llm") is True}
+
+
+def save_settings(directory, **values):
+    data = settings(directory) | values
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    (directory / "settings.json").write_text(json.dumps(data), encoding="utf-8")
+    return data
+
+
+def write_live(directory, data):
+    # Replace atomically so the dashboard never reads half a file.
+    tmp = directory / f"live.{os.getpid()}.tmp"
+    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, directory / "live.json")
 
 
 def connected(database):
@@ -77,7 +102,20 @@ def trigger(repo, commit, directory, wait=DEBOUNCE):
         time.sleep(wait)
         if git(repo, "rev-parse", "HEAD").decode().strip() != commit:
             return None
-        folder, _, _ = scan(repo, directory / "scans", directory, offline=True, trigger=Trigger.GIT_HOOK)
+        use_model = settings(directory)["background_llm"]
+        live = {"repo": str(repo), "commit": commit, "stage": 0, "log": [], "started": time.time()}
+
+        def report(stage, text):
+            live.update(stage=stage, log=(live["log"] + [text])[-30:], updated=time.time())
+            write_live(directory, live)
+
+        # shortcut: one live.json for the whole PC; with two repositories scanning at once the
+        # dashboard shows whichever wrote last. Key the file by repository if that becomes common.
+        try:
+            folder, _, _ = scan(repo, directory / "scans", directory, offline=not use_model,
+                                trigger=Trigger.GIT_HOOK, progress=report, new_high_only=use_model)
+        finally:
+            (directory / "live.json").unlink(missing_ok=True)
         return folder
     except Exception as exc:
         # Nobody watches a background hook, so leave one line the user can find; engine messages hold no source text.
