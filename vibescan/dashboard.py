@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from scanner.ingest import git
 from scanner.models import ScanResult
+from . import hook
 from .cli import ScanInputError, scan
 from .login import login
 from .register import data_dir
@@ -43,6 +44,10 @@ class RepoInput(BaseModel):
 
 class ScanInput(RepoInput):
     offline: bool = Field(default=True, strict=True)
+
+
+class HookInput(RepoInput):
+    enabled: bool = Field(strict=True)
 
 
 def dashboard_app(results: Path, address: str, ticket: str, directory: Path | None = None):
@@ -86,19 +91,50 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
                 "branch": None if branch == "HEAD" else branch}
 
     def connected():
-        if not database.exists():
-            return []
-        with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as db:
-            if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='connected_repos'").fetchone():
-                return []
-            return [row[0] for row in db.execute("SELECT path FROM connected_repos ORDER BY path")]
+        return hook.connected(database)
+
+    def hook_state(path):
+        if Path(path).is_relative_to(clones):
+            return None  # VibeScan's own clones get no local commits, so a hook would never fire
+        try:
+            return hook.installed(Path(path))
+        except (ValueError, OSError, subprocess.TimeoutExpired):
+            return False
 
     @app.get("/api/repos")
     def repos():
         try:
-            return {"repos": [{"path": path, "name": Path(path).name} for path in connected()]}
+            return {"repos": [{"path": path, "name": Path(path).name, "hook": hook_state(path)} for path in connected()]}
         except (OSError, sqlite3.Error):
             raise HTTPException(503, "연결된 레포 목록을 읽을 수 없습니다.") from None
+
+    @app.post("/api/hook")
+    def set_hook(body: HookInput):
+        repo = repository(body.path)
+        try:
+            if repo["path"] not in connected():
+                raise HTTPException(404, "먼저 레포를 연결하세요.")
+        except (OSError, sqlite3.Error):
+            raise HTTPException(503, "레포 연결 정보를 읽을 수 없습니다.") from None
+        if hook_state(repo["path"]) is None:
+            raise HTTPException(422, "GitHub 주소로 연결한 레포는 이 PC에서 커밋하지 않으므로 자동 스캔을 설치하지 않습니다.")
+        try:
+            (hook.install if body.enabled else hook.uninstall)(Path(repo["path"]))
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
+        except (OSError, subprocess.TimeoutExpired):
+            raise HTTPException(503, "hook 파일을 쓸 수 없습니다. 저장소 폴더 권한을 확인하세요.") from None
+        return {"path": repo["path"], "hook": hook_state(repo["path"])}
+
+    @app.get("/api/latest")
+    def latest():
+        # Cheap poll: newest result folder by modification time, so the page can notice hook scans.
+        try:
+            folders = [f for f in root.iterdir() if (f / "scan_result.json").is_file()] if root.exists() else []
+            newest = max(folders, key=lambda f: f.stat().st_mtime, default=None)
+        except OSError:
+            raise HTTPException(503, "결과 폴더에 접근할 수 없습니다.") from None
+        return {"scan_id": newest.name if newest else None}
 
     def clone(url):
         match = GITHUB.fullmatch(url)

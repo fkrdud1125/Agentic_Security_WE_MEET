@@ -59,6 +59,33 @@ vm.runInContext(`renderTrend({scan_id:'a', repo:{path:'C:/r'}, scanned_at:'2026-
 assert.equal(trend.hidden, true);
 console.log('Dashboard risk trend: only this repo, up to the scan on screen: OK');
 
+get('repo-select').value = 'C:/r';
+vm.runInContext(`repoList = [{path:'C:/r', hook:true}]; busy(false);`, context);
+assert.equal(get('hook-toggle').hidden, false);
+assert.match(get('hook-toggle').textContent, /끄기/);
+vm.runInContext(`repoList = [{path:'C:/r', hook:null}]; busy(false);`, context);
+assert.equal(get('hook-toggle').hidden, true);  // GitHub clones get no commit hook
+vm.runInContext(`repoList = [{path:'C:/r', hook:false}]; busy(true);`, context);
+assert.equal(get('hook-toggle').disabled, true);
+assert.match(get('hook-toggle').textContent, /켜기/);
+console.log('Dashboard hook toggle states: OK');
+
+async function firstHookResult() {
+  // The folder starts empty; the first result written by the commit hook must still open.
+  const opened = [];
+  context.setTimeout = () => {};
+  vm.runInContext('latestSeen = undefined; scanList = []; scanning = false;', context);
+  context.refresh = undefined;
+  vm.runInContext('refresh = async id => { opened.push(id); }', Object.assign(context, {opened}));
+  context.fetch = async () => ({ok: true, json: async () => ({scan_id: null})});
+  await vm.runInContext('pollLatest()', context);
+  assert.deepEqual(opened, []);
+  context.fetch = async () => ({ok: true, json: async () => ({scan_id: 'hook-scan'})});
+  await vm.runInContext('pollLatest()', context);
+  assert.deepEqual(opened, ['hook-scan']);
+  console.log('Dashboard opens the first hook result in an empty folder: OK');
+}
+
 async function scanFlow() {
   get('repo-select').value = 'C:/repo';
   get('result').hidden = false;
@@ -134,4 +161,4 @@ async function scanFlow() {
   assert.equal(get('scan-select').value, 'new-scan');
   console.log('Dashboard login states and model failure hints: OK');
 }
-scanFlow().catch(error => { console.error(error); process.exitCode = 1; });
+scanFlow().then(firstHookResult).catch(error => { console.error(error); process.exitCode = 1; });

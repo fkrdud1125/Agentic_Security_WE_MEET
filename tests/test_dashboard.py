@@ -157,7 +157,7 @@ class DashboardTests(unittest.TestCase):
         app = dashboard_app(self.root, "127.0.0.1:8765", "new-ticket", self.directory)
         with TestClient(app, base_url="http://127.0.0.1:8765") as reopened:
             rows = reopened.get("/api/repos", headers={"X-VibeScan-Token": "new-ticket"}).json()["repos"]
-            self.assertEqual(rows, [{"path": str(repo.resolve()), "name": "repo"}])
+            self.assertEqual(rows, [{"path": str(repo.resolve()), "name": "repo", "hook": False}])
         with TestClient(dashboard_app(repo / "out", "127.0.0.1:8765", "test-ticket", self.directory),
                         base_url="http://127.0.0.1:8765") as inside:
             response = inside.post("/api/repos", headers=self.headers, json={"path": str(repo)})
@@ -323,6 +323,11 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(response.json()["path"], str(clone))
             again = self.client.post("/api/repos", headers=self.headers, json={"path": " git@github.com:owner/demo.git "})
             self.assertEqual(again.json()["path"], str(clone))
+            listed = self.client.get("/api/repos", headers=self.headers).json()["repos"]
+            self.assertIsNone(next(r for r in listed if r["path"] == str(clone))["hook"])
+            refused = self.client.post("/api/hook", headers=self.headers, json={"path": str(clone), "enabled": True})
+            self.assertEqual(refused.status_code, 422)
+            self.assertFalse((clone / ".git/hooks/post-commit").exists())
 
             (source / "app.py").write_text('API_TOKEN = "test-credential-newer"\n')
             head = self.commit(source)
@@ -362,3 +367,24 @@ class DashboardTests(unittest.TestCase):
             response = self.client.post("/api/logout", headers=self.headers, json={})
             self.assertEqual(response.status_code, 503)
             self.assertNotIn("PRIVATE", response.text)
+
+    def test_hook_toggle_and_latest_result_poll(self):
+        repo = self.repository()
+        body = {"path": str(repo), "enabled": True}
+        self.assertEqual(self.client.post("/api/hook", json=body).status_code, 403)
+        self.assertEqual(self.client.post("/api/hook", headers=self.headers, json=body).status_code, 404)
+        self.client.post("/api/repos", headers=self.headers, json={"path": str(repo)})
+        self.assertEqual(self.client.get("/api/repos", headers=self.headers).json()["repos"][0]["hook"], False)
+        self.assertEqual(self.client.post("/api/hook", headers=self.headers, json=body).json()["hook"], True)
+        self.assertTrue((repo / ".git/hooks/post-commit").is_file())
+        self.assertEqual(self.client.get("/api/repos", headers=self.headers).json()["repos"][0]["hook"], True)
+        self.assertEqual(self.client.post("/api/hook", headers=self.headers, json=body | {"enabled": False}).json()["hook"], False)
+        self.assertFalse((repo / ".git/hooks/post-commit").exists())
+        (repo / ".git/hooks/post-commit").write_text("#!/bin/sh\necho mine\n")
+        response = self.client.post("/api/hook", headers=self.headers, json=body)
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("덮어쓰지 않았습니다", response.json()["detail"])
+
+        self.assertEqual(self.client.get("/api/latest", headers=self.headers).json(), {"scan_id": None})
+        self.save(sample())
+        self.assertEqual(self.client.get("/api/latest", headers=self.headers).json(), {"scan_id": "scan-1"})

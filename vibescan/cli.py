@@ -17,7 +17,7 @@ from scanner.history import compare, list_scans, save_scan
 from scanner.context import Context
 from scanner.ingest import snapshot, languages
 from scanner.kisa import checklist, legacy_coverage
-from scanner.models import Change, ScanResult, Severity, Status, Target
+from scanner.models import Change, ScanResult, Severity, Status, Target, Trigger
 from scanner.static import inspect, profile
 from . import analysis, inference
 from .register import data_dir
@@ -94,7 +94,7 @@ class ScanInputError(ValueError):
     """A scan the user can fix; its message is safe to show in the dashboard."""
 
 
-def scan(repo, output, directory, offline=False):
+def scan(repo, output, directory, offline=False, trigger=Trigger.MANUAL):
     repo = repo.expanduser().resolve()
     output = output.expanduser().resolve()
     if output.is_relative_to(repo) or directory.resolve().is_relative_to(repo):
@@ -157,7 +157,7 @@ def scan(repo, output, directory, offline=False):
     app.routes = len(getattr(findings, 'routes', [])) or app.routes
     result = ScanResult(scan_id, repo.name, datetime.now(timezone.utc), Target(str(repo)),
                         min(100, sum(weights[f.severity] for f in current if f.status == Status.OPEN)), app, current + gone, "",
-                        branch=branch, commit=commit, baseline_commit=previous.commit if matched else None,
+                        branch=branch, commit=commit, baseline_commit=previous.commit if matched else None, trigger=trigger,
                         checklist=[c['name'] for c in coverage],
                         analysis_note=note, coverage=coverage,
                         engine={'version': '0.2.0', 'rulepack': 'vibescan-2026.11.1', 'semgrep': '1.185.0'},
@@ -196,12 +196,17 @@ def main():
     run.add_argument("repo", type=Path)
     run.add_argument("--offline", action="store_true", help="로컬 규칙만 사용")
     run.add_argument("--output", type=Path, help="실행별 결과 폴더의 상위 경로")
+    hook = commands.add_parser("hook-trigger", help="git post-commit hook이 호출하는 백그라운드 검사")
+    hook.add_argument("commit")
     args = parser.parse_args()
     try:
         directory = data_dir()
         if args.command in (None, "dashboard"):
             from .dashboard import serve
             serve(getattr(args, "results", None) or directory / "scans")
+        elif args.command == "hook-trigger":
+            from .hook import trigger
+            trigger(Path.cwd(), args.commit, directory)
         elif args.command == "login":
             from .login import login
             print(login(directory))

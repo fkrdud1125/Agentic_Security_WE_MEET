@@ -10,6 +10,8 @@ if (location.hash) {
 }
 let result = null;
 let scanList = [];
+let repoList = [];
+let latestSeen;  // undefined until the first poll; null means the folder had no results
 let detailVersion = 0;
 let scanning = false;
 let pollTimer = null;
@@ -211,9 +213,14 @@ function busy(running) {
   $("repo-select").disabled = running || !$("repo-select").value;
   $("scan").disabled = running || !$("repo-select").value;
   $("scan").textContent = running ? "스캔 중…" : "다시 스캔";
+  const repo = repoList.find(r => r.path === $("repo-select").value);
+  $("hook-toggle").hidden = !repo || repo.hook === null;  // null: GitHub clone, never committed to here
+  $("hook-toggle").disabled = running;
+  $("hook-toggle").textContent = repo?.hook ? "커밋 후 자동 스캔 끄기" : "커밋 후 자동 스캔 켜기";
 }
 async function loadRepos(preferred = null) {
   const data = await api("/api/repos");
+  repoList = data.repos;
   const previous = preferred || $("repo-select").value;
   $("repo-select").replaceChildren();
   for (const repo of data.repos) {
@@ -298,6 +305,29 @@ $("logout").addEventListener("click", async () => {
   await loadAuth();
 });
 $("repo-select").addEventListener("change", () => busy(scanning));
+$("hook-toggle").addEventListener("click", async () => {
+  const repo = repoList.find(r => r.path === $("repo-select").value);
+  if (!repo) return;
+  $("hook-toggle").disabled = true;
+  try {
+    const data = await api("/api/hook", {path: repo.path, enabled: !repo.hook});
+    jobMessage(data.hook ? "커밋 후 자동 스캔을 켰습니다. 이 레포에서 커밋하면 몇 초 뒤 결과가 여기에 나타납니다."
+      : "커밋 후 자동 스캔을 껐습니다.");
+    await loadRepos(repo.path);
+  } catch (error) { jobMessage(error.message, true); busy(scanning); }
+});
+async function pollLatest() {
+  // Results written by the commit hook appear without pressing anything.
+  try {
+    const {scan_id: id} = await api("/api/latest");
+    if (id && latestSeen !== undefined && id !== latestSeen && !scanning && !scanList.some(s => s.scan_id === id)) {
+      await refresh(id);
+      if (result?.scan_id === id) jobMessage(`커밋 ${(result.commit || "").slice(0, 12)}의 자동 스캔 결과가 도착했습니다.`);
+    }
+    latestSeen = id;
+  } catch { /* the next poll retries; manual refresh still works */ }
+  setTimeout(pollLatest, 10000);
+}
 $("scan").addEventListener("click", async () => {
   ++jobVersion;
   clearTimeout(pollTimer);
@@ -327,3 +357,4 @@ refresh();
 loadRepos().catch(error => jobMessage(error.message, true));
 loadAuth();
 pollJob();
+pollLatest();
