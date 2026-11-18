@@ -206,3 +206,20 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(sorted({stage for stage, _ in steps}), [0, 1, 2, 3, 4])
         self.assertEqual([stage for stage, _ in steps], sorted(stage for stage, _ in steps))
         self.assertNotIn("private-value", json.dumps(steps, ensure_ascii=False))
+
+    def test_paths_differing_only_in_case_do_not_fail_the_scan(self):
+        repo = self.base / "case"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        blob = subprocess.check_output(["git", "-C", str(repo), "hash-object", "-w", "--stdin"],
+                                       input=b'API_TOKEN = "private-value-1234"\n').decode().strip()
+        for name in ("Config.py", "config.py"):  # made on Linux; one file on Windows and macOS
+            subprocess.run(["git", "-C", str(repo), "update-index", "--add", "--cacheinfo", f"100644,{blob},{name}"], check=True)
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                        "-c", "commit.gpgsign=false", "commit", "-qm", "case"], check=True)
+        with patch("scanner.static.semgrep", return_value=[]):
+            folder, _, _ = cli.scan(repo, self.base / "out", self.base / "state", offline=True)
+        data = json.loads((folder / "scan_result.json").read_text(encoding="utf-8"))
+        scanned = {f["location"]["file"] for f in data["findings"]}
+        # Every path is either scanned or reported as not checked, never silently dropped.
+        self.assertEqual(scanned | set(data["partial_files"]), {"Config.py", "config.py"})

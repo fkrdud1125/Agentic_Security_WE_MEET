@@ -349,7 +349,7 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
         if path.resolve() != path or not path.is_file():
             raise HTTPException(404, "결과 파일이 없거나 허용된 폴더 밖에 있습니다.")
         try:
-            # shortcut: whole JSON files are read, index results when histories become large.
+            # shortcut: the first listing per dashboard process parses every result; index summaries in SQLite if startup slows.
             with path.open("rb") as file:
                 raw = file.read(16 * 1024 * 1024 + 1)
             if len(raw) > 16 * 1024 * 1024:
@@ -373,22 +373,36 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
             raise HTTPException(404)
         return FileResponse(ASSETS / name)
 
+    summaries = {}  # folder name -> ((mtime, size) of its result file, list row or None when unreadable)
+
     @app.get("/api/scans")
     def scans():
-        rows, unavailable = [], 0
+        nonlocal summaries
+        rows, unavailable, seen = [], 0, {}
         try:
             folders = list(root.iterdir()) if root.exists() else []
             for folder in folders:
-                if not folder.is_dir():
-                    continue
                 try:
-                    data = read_result(folder.name)
-                except HTTPException:
+                    stat = (folder / "scan_result.json").stat()
+                except OSError:
+                    continue  # not a result: a scan still being written, or an unrelated folder
+                # Every commit adds a result, so parse each file once and reuse it until it changes.
+                key = (stat.st_mtime_ns, stat.st_size)
+                cached = summaries.get(folder.name)
+                if not cached or cached[0] != key:
+                    try:
+                        data = read_result(folder.name)
+                        cached = key, {k: data[k] for k in ("scan_id", "repo", "commit", "scanned_at", "risk_score")}
+                    except HTTPException:
+                        cached = key, None
+                seen[folder.name] = cached
+                if cached[1] is None:
                     unavailable += 1
-                    continue
-                rows.append({key: data[key] for key in ("scan_id", "repo", "commit", "scanned_at", "risk_score")})
+                else:
+                    rows.append(cached[1])
         except OSError:
             raise HTTPException(503, "결과 폴더에 접근할 수 없습니다.") from None
+        summaries = seen
         rows.sort(key=lambda row: (row["scanned_at"], row["scan_id"]), reverse=True)
         return {"scans": rows, "unavailable": unavailable, "results_path": str(root)}
 

@@ -21,6 +21,7 @@ class Files(list):
     def __init__(self):
         super().__init__()
         self.sensitive_files = []
+        self.skipped = []  # committed paths this file system cannot hold side by side
 
 
 def sensitive_kind(path):
@@ -147,7 +148,12 @@ def snapshot(repo, destination):
             continue
         target = destination / path
         target.parent.mkdir(parents=True, exist_ok=True)
-        with target.open("xb") as output:
-            output.write(blob)
+        try:
+            with target.open("xb") as output:
+                output.write(blob)
+        except FileExistsError:
+            # Config.py and config.py are one file on Windows/macOS: scan the first, report the second as not checked.
+            files.skipped.append(path.as_posix())
+            continue
         files.append(path.as_posix())
     return commit, None if branch == "HEAD" else branch, files

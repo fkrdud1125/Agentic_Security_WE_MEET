@@ -97,6 +97,18 @@ class DashboardTests(unittest.TestCase):
         good.write_bytes(b" " * (16 * 1024 * 1024 + 1))
         self.assertEqual(self.client.get("/api/scans/scan-1", headers=self.headers).status_code, 422)
 
+    def test_listing_skips_unfinished_folders_and_rereads_changed_results(self):
+        path = self.save(sample())
+        (self.root / "tmp-being-written" / "result").mkdir(parents=True)  # a scan still saving its result
+        listing = self.client.get("/api/scans", headers=self.headers).json()
+        self.assertEqual((len(listing["scans"]), listing["unavailable"]), (1, 0))
+        path.write_text(json.dumps(dict(sample(), risk_score=77)), encoding="utf-8")
+        os.utime(path, ns=(1, 1))  # a different modification time, as a rewrite would have
+        self.assertEqual(self.client.get("/api/scans", headers=self.headers).json()["scans"][0]["risk_score"], 77)
+        path.write_text("PRIVATE-now-broken", encoding="utf-8")
+        listing = self.client.get("/api/scans", headers=self.headers).json()
+        self.assertEqual((listing["scans"], listing["unavailable"]), ([], 1))
+
     def test_symlink_cannot_escape_results_folder(self):
         path = self.save(sample())
         outside = self.root.parent / "outside.json"

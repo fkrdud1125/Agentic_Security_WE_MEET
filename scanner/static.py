@@ -73,6 +73,7 @@ def inspect(directory, files):
     partial = list(getattr(matched, 'partial_files', []))
     if any(name not in allowed for name in partial):
         raise ValueError('부분 실패 파일이 검사 범위 밖입니다.')
+    partial += getattr(files, 'skipped', [])
     contents = {name: (directory / name).read_text(encoding='utf-8-sig') for name in files}
     for hit in raw:
         lines = contents[hit.file].splitlines()
