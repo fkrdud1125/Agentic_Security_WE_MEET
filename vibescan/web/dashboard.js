@@ -10,6 +10,9 @@ if (location.hash) {
 }
 let result = null;
 let detailVersion = 0;
+let scanning = false;
+let pollTimer = null;
+let jobVersion = 0;
 
 function node(tag, text, className) {
   const item = document.createElement(tag);
@@ -23,11 +26,14 @@ function message(text, error = false) {
   $("message").textContent = text;
   $("message").classList.toggle("error", error);
 }
-async function api(path) {
-  const response = await fetch(path, {headers: {"X-VibeScan-Token": token}, cache: "no-store"});
+async function api(path, body) {
+  const response = await fetch(path, {method: body ? "POST" : "GET",
+    headers: {"X-VibeScan-Token": token, "Content-Type": "application/json"},
+    body: body ? JSON.stringify(body) : undefined, cache: "no-store"});
   if (!response.ok) {
     if (response.status === 403) throw new Error("접속 권한이 만료되었습니다. 터미널에 표시된 대시보드 주소로 다시 여세요.");
-    throw new Error("결과를 읽을 수 없습니다. 파일 상태를 확인한 뒤 다시 시도하세요.");
+    const error = await response.json().catch(() => ({}));
+    throw new Error(typeof error.detail === "string" ? error.detail : "요청을 처리할 수 없습니다. 입력과 파일 상태를 확인하세요.");
   }
   return response.json();
 }
@@ -126,7 +132,7 @@ async function selectScan() {
     render();
   } catch (error) { if (version === detailVersion) message(error.message, true); }
 }
-async function refresh() {
+async function refresh(preferred = null) {
   $("refresh").disabled = true;
   $("scan-select").disabled = true;
   ++detailVersion;
@@ -134,7 +140,7 @@ async function refresh() {
   $("empty").hidden = true;
   message("저장된 진단 결과를 불러오는 중입니다.");
   try {
-    const previous = $("scan-select").value;
+    const previous = preferred || $("scan-select").value;
     const data = await api("/api/scans");
     $("results-path").textContent = `결과 폴더: ${data.results_path}`;
     $("scan-select").replaceChildren();
@@ -152,7 +158,78 @@ async function refresh() {
   } catch (error) { message(error.message, true); }
   finally { $("refresh").disabled = false; }
 }
-$("refresh").addEventListener("click", refresh);
+function jobMessage(text, error = false) {
+  $("job-message").textContent = text;
+  $("job-message").classList.toggle("error", error);
+}
+function busy(running) {
+  scanning = running;
+  for (const id of ["connect", "repo-path", "use-model"]) $(id).disabled = running;
+  $("repo-select").disabled = running || !$("repo-select").value;
+  $("scan").disabled = running || !$("repo-select").value;
+  $("scan").textContent = running ? "스캔 중…" : "다시 스캔";
+}
+async function loadRepos(preferred = null) {
+  const data = await api("/api/repos");
+  const previous = preferred || $("repo-select").value;
+  $("repo-select").replaceChildren();
+  for (const repo of data.repos) {
+    const option = node("option", `${repo.name} · ${repo.path}`);
+    option.value = repo.path;
+    $("repo-select").append(option);
+  }
+  if (data.repos.some(repo => repo.path === previous)) $("repo-select").value = previous;
+  if (!data.repos.length) {
+    const option = node("option", "연결된 레포 없음"); option.value = ""; $("repo-select").append(option);
+  }
+  busy(scanning);
+}
+async function pollJob() {
+  clearTimeout(pollTimer);
+  const version = ++jobVersion;
+  try {
+    const job = await api("/api/scan");
+    if (version !== jobVersion) return;
+    busy(job.state === "running");
+    if (scanning) {
+      jobMessage(`${job.repo} · ${job.offline ? "정적 검사" : "정적 검사 및 ChatGPT 분석"} 진행 중입니다. 완료되면 결과가 자동으로 열립니다.`);
+      pollTimer = setTimeout(pollJob, 1000);
+    } else if (job.state === "completed") {
+      jobMessage(`스캔 완료 · ${job.message}`);
+      await refresh(job.scan_id);
+    } else if (job.state === "failed") jobMessage(job.message, true);
+  } catch (error) {
+    if (version !== jobVersion) return;
+    jobMessage(error.message, true);
+    if (scanning) pollTimer = setTimeout(pollJob, 3000);
+  }
+}
+$("connect-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  $("connect").disabled = true;
+  try {
+    const repo = await api("/api/repos", {path: $("repo-path").value});
+    await loadRepos(repo.path);
+    jobMessage(`${repo.name} 연결 완료 · ${repo.branch || "분리된 HEAD"} / ${repo.commit.slice(0, 12)}. ‘다시 스캔’을 눌러 검사하세요.`);
+  } catch (error) { jobMessage(error.message, true); }
+  finally { $("connect").disabled = scanning; }
+});
+$("repo-select").addEventListener("change", () => busy(scanning));
+$("scan").addEventListener("click", async () => {
+  ++jobVersion;
+  clearTimeout(pollTimer);
+  busy(true);
+  jobMessage("스캔을 시작하고 있습니다.");
+  try {
+    await api("/api/scan", {path: $("repo-select").value, offline: !$("use-model").checked});
+    await pollJob();
+  } catch (error) {
+    jobMessage(error.message, true);
+    // The request may have started a scan even if its response was lost.
+    await pollJob();
+  }
+});
+$("refresh").addEventListener("click", () => refresh());
 $("scan-select").addEventListener("change", selectScan);
 for (const id of ["severity-filter", "status-filter"]) $(id).addEventListener("change", filterFindings);
 $("search").addEventListener("input", filterFindings);
@@ -164,3 +241,5 @@ $("download").addEventListener("click", () => {
   link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 refresh();
+loadRepos().catch(error => jobMessage(error.message, true));
+pollJob();

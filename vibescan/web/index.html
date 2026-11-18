@@ -12,23 +12,32 @@
     <a class="brand" href="/">V<span>▰</span> VibeScan</a>
     <p class="eyebrow">LOCAL SECURITY WORKSPACE</p>
     <div class="nav-current">◈ &nbsp; 진단 결과</div>
-    <div class="aside-note"><span class="dot"></span> 내 PC에서 실행 중<br>저장된 결과를 읽기 전용으로 확인합니다.</div>
+    <div class="aside-note"><span class="dot"></span> 내 PC에서 실행 중<br>소스는 읽기 전용으로 검사합니다.</div>
   </aside>
   <main>
     <header><div><p class="eyebrow">SECURITY OVERVIEW</p><h1>코드를 이해하고,<br class="mobile-only"> 더 안전하게.</h1>
       <p class="muted">발견된 문제의 근거부터 수정 방법까지 한곳에서 확인하세요.</p></div>
       <button id="refresh" type="button">결과 새로고침 ↻</button></header>
     <p id="message" role="status" aria-live="polite">저장된 진단 결과를 불러오는 중입니다.</p>
+    <section class="panel repo-connect" aria-labelledby="connect-title">
+      <h2 id="connect-title">로컬 레포 연결</h2>
+      <form id="connect-form">
+        <label for="repo-path">Git 저장소 루트 경로</label>
+        <div class="connect-row"><input id="repo-path" required maxlength="4096" placeholder="예: C:\projects\my-app" autocomplete="off"><button id="connect" type="submit">레포 연결</button></div>
+      </form>
+      <div class="connect-row scan-controls"><label for="repo-select">연결된 레포</label><select id="repo-select" disabled><option value="">연결된 레포 없음</option></select><button id="scan" type="button" disabled>다시 스캔</button></div>
+      <label class="model-option"><input id="use-model" type="checkbox"> ChatGPT 분석 사용 (로그인 필요)</label>
+      <p class="muted">현재 HEAD의 전체 정적 검사입니다. 미커밋 변경은 제외합니다.<br>ChatGPT 분석을 선택하면 비밀값을 가린 코드 일부를 OpenAI로 보냅니다. 로그인은 터미널에서 <code>vibescan login</code>으로 진행하세요.</p>
+      <p id="job-message" role="status" aria-live="polite"></p>
+    </section>
     <section class="panel selector">
       <label for="scan-select">스캔 이력</label><select id="scan-select" disabled><option>결과를 불러오는 중</option></select>
       <p id="results-path" class="muted"></p>
     </section>
     <section id="empty" class="panel empty" hidden>
       <span class="empty-icon">◇</span><h2>첫 진단 결과를 기다리고 있어요</h2>
-      <p>터미널에서 저장소를 검사한 뒤 위의 ‘결과 새로고침’을 눌러주세요.</p>
-      <pre>vibescan scan "저장소 경로" --offline</pre>
-      <p class="muted">ChatGPT 분석을 사용하려면 <code>vibescan login</code> 후 <code>--offline</code> 없이 검사하세요.<br>
-        다른 출력 폴더는 <code>vibescan dashboard --results "출력 폴더"</code>로 열 수 있습니다.</p>
+      <p>위에서 로컬 레포를 연결하고 ‘다시 스캔’을 눌러주세요.</p>
+      <p class="muted">CLI의 <code>vibescan scan "저장소 경로" --offline</code>도 사용할 수 있습니다.<br>다른 출력 폴더는 <code>vibescan dashboard --results "출력 폴더"</code>로 열 수 있습니다.</p>
     </section>
     <div id="result" hidden>
       <section class="repo-heading"><div><h2 id="repo-name"></h2><p id="repo-meta" class="muted"></p></div>

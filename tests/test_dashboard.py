@@ -1,4 +1,7 @@
 import json
+import subprocess
+import threading
+import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -17,9 +20,10 @@ class DashboardTests(unittest.TestCase):
         temp = TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name) / "scans"
-        self.client = TestClient(dashboard_app(self.root, "127.0.0.1:8765", "test-ticket"),
-                                 base_url="http://127.0.0.1:8765")
-        self.addCleanup(self.client.close)
+        self.directory = self.root.parent / "state"
+        self.client = self.enterContext(TestClient(
+            dashboard_app(self.root, "127.0.0.1:8765", "test-ticket", self.directory),
+            base_url="http://127.0.0.1:8765"))
         self.headers = {"X-VibeScan-Token": "test-ticket"}
 
     def save(self, data):
@@ -109,3 +113,109 @@ class DashboardTests(unittest.TestCase):
                  patch("vibescan.dashboard.serve") as serve:
                 cli.main()
                 serve.assert_called_once_with(expected)
+
+    def repository(self):
+        repo = self.root.parent / "repo"
+        repo.mkdir()
+        (repo / "app.py").write_text('API_TOKEN = "test-credential-value"\n')
+        subprocess.run(["git", "-C", str(repo), "init", "-q", "-b", "main"], check=True)
+        self.commit(repo)
+        return repo
+
+    def commit(self, repo):
+        subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=Test", "-c",
+                        "user.email=test@example.invalid", "-c", "commit.gpgsign=false",
+                        "commit", "-qm", "sample"], check=True)
+        return subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"]).decode().strip()
+
+    def wait_scan(self):
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            job = self.client.get("/api/scan", headers=self.headers).json()
+            if job["state"] != "running":
+                return job
+            time.sleep(0.02)
+        self.fail("Scan did not finish")
+
+    def test_repo_connection_is_validated_deduplicated_and_persistent(self):
+        self.assertEqual(self.client.get("/api/repos", headers=self.headers).json(), {"repos": []})
+        self.assertFalse(self.directory.exists())
+        repo = self.repository()
+        (repo / "child").mkdir()
+        for path in (self.root.parent, repo / "child", repo / "missing"):
+            self.assertEqual(self.client.post("/api/repos", headers=self.headers, json={"path": str(path)}).status_code, 422)
+        for path in (str(repo), str(repo) + "/."):
+            response = self.client.post("/api/repos", headers=self.headers, json={"path": path})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["branch"], "main")
+        app = dashboard_app(self.root, "127.0.0.1:8765", "new-ticket", self.directory)
+        with TestClient(app, base_url="http://127.0.0.1:8765") as reopened:
+            rows = reopened.get("/api/repos", headers={"X-VibeScan-Token": "new-ticket"}).json()["repos"]
+            self.assertEqual(rows, [{"path": str(repo.resolve()), "name": "repo"}])
+        with TestClient(dashboard_app(repo / "out", "127.0.0.1:8765", "test-ticket", self.directory),
+                        base_url="http://127.0.0.1:8765") as inside:
+            self.assertEqual(inside.post("/api/repos", headers=self.headers, json={"path": str(repo)}).status_code, 422)
+
+    def test_scan_posts_require_access_and_a_connected_repository(self):
+        repo = self.repository()
+        body = {"path": str(repo)}
+        with patch("vibescan.dashboard.scan") as engine:
+            for endpoint in ("/api/repos", "/api/scan"):
+                self.assertEqual(self.client.post(endpoint, json=body).status_code, 403)
+                self.assertEqual(self.client.post(endpoint, headers=self.headers | {"Origin": "https://outside.invalid"}, json=body).status_code, 403)
+            self.assertEqual(self.client.post("/api/scan", headers=self.headers, json=body).status_code, 404)
+            self.assertEqual(self.client.post("/api/scan", headers=self.headers, json=body | {"offline": "false"}).status_code, 422)
+            self.assertEqual(self.client.post("/api/repos", headers=self.headers, json=body | {"command": "anything"}).status_code, 422)
+            engine.assert_not_called()
+
+    def test_real_scan_and_rescan_use_latest_head_without_model_by_default(self):
+        repo = self.repository()
+        self.client.post("/api/repos", headers=self.headers, json={"path": str(repo)})
+        ids = []
+        with patch("vibescan.cli.access_token") as token:
+            for value in ("first", "second"):
+                (repo / "app.py").write_text(f'API_TOKEN = "test-credential-{value}"\n')
+                head = self.commit(repo)
+                response = self.client.post("/api/scan", headers=self.headers, json={"path": str(repo)})
+                self.assertEqual(response.status_code, 202)
+                self.assertTrue(response.json()["offline"])
+                job = self.wait_scan()
+                self.assertEqual(job["state"], "completed", job)
+                ids.append(job["scan_id"])
+                saved = self.client.get("/api/scans/" + job["scan_id"], headers=self.headers).json()
+                self.assertEqual(saved["commit"], head)
+                self.assertEqual(len(saved["findings"]), 1)
+                self.assertNotIn("test-credential-", json.dumps(saved))
+            token.assert_not_called()
+        self.assertEqual(len(set(ids)), 2)
+        self.assertEqual(len(self.client.get("/api/scans", headers=self.headers).json()["scans"]), 2)
+
+    def test_duplicate_scan_is_rejected_and_failure_preserves_previous_results(self):
+        repo = self.repository()
+        self.client.post("/api/repos", headers=self.headers, json={"path": str(repo)})
+        old = self.save(sample())
+        before = old.read_bytes()
+        release = threading.Event()
+
+        def fail(*args, **kwargs):
+            release.wait(5)
+            raise RuntimeError("PRIVATE-PROVIDER-ERROR")
+
+        with patch("vibescan.dashboard.scan", side_effect=fail) as engine:
+            try:
+                body = {"path": str(repo), "offline": False}
+                self.assertEqual(self.client.post("/api/scan", headers=self.headers, json=body).status_code, 202)
+                self.assertEqual(self.client.post("/api/scan", headers=self.headers, json=body).status_code, 409)
+                self.assertEqual(self.client.get("/api/scan", headers=self.headers).json()["state"], "running")
+                self.assertEqual(self.client.get("/api/scans/scan-1", headers=self.headers).status_code, 200)
+            finally:
+                release.set()
+            job = self.wait_scan()
+            self.assertEqual(job["state"], "failed")
+            self.assertNotIn("PRIVATE", json.dumps(job))
+            engine.assert_called_once_with(repo.resolve(), self.root.resolve(), self.directory.resolve(), offline=False)
+        self.assertEqual(old.read_bytes(), before)
+        with patch("vibescan.dashboard.scan", return_value=(old.parent, "retry complete")):
+            self.assertEqual(self.client.post("/api/scan", headers=self.headers, json={"path": str(repo)}).status_code, 202)
+            self.assertEqual(self.wait_scan()["state"], "completed")

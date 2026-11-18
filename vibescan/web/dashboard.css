@@ -1,4 +1,14 @@
 :root{font-family:Inter,"Segoe UI","Malgun Gothic",sans-serif;color:#172c40;background:#f4f6f8;font-synthesis:none;line-height:1.6}
+.connect-row{display:flex;align-items:center;gap:12px;margin:8px 0}
+.connect-row button{white-space:nowrap}
+.repo-connect label{font-size:12px}
+.scan-controls{margin-top:18px}
+.scan-controls>label{white-space:nowrap}
+.model-option{display:flex;align-items:center;gap:8px;margin:16px 0 6px}
+.model-option input{width:auto;accent-color:#087e7d}
+#job-message{color:#176e63;overflow-wrap:anywhere}
+#job-message.error{color:#a23c31}
+@media(max-width:700px){.scan-controls{flex-wrap:wrap}.scan-controls>label{width:100%}.scan-controls select{flex:1}.connect-row{gap:8px}}
 
 *{box-sizing:border-box}
 body{margin:0}
