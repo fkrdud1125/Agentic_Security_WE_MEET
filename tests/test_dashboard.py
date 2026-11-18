@@ -1,4 +1,6 @@
 import json
+import os
+import shutil
 import subprocess
 import threading
 import time
@@ -246,7 +248,8 @@ class DashboardTests(unittest.TestCase):
             release.wait(5)
             return "로그인 완료 · 구독 사용 가능"
 
-        with patch("vibescan.dashboard.login", side_effect=signed_in),                 patch("vibescan.dashboard.status", return_value={"state": "ready", "message": "ok"}):
+        with patch("vibescan.dashboard.login", side_effect=signed_in), \
+                patch("vibescan.dashboard.status", return_value={"state": "ready", "message": "ok"}):
             try:
                 self.assertEqual(self.client.post("/api/login", headers=self.headers, json={}).status_code, 202)
                 self.assertEqual(self.client.post("/api/login", headers=self.headers, json={}).status_code, 409)
@@ -254,8 +257,74 @@ class DashboardTests(unittest.TestCase):
                 release.set()
             data = self.wait_login()
             self.assertEqual((data["state"], data["login"]["state"]), ("ready", "completed"))
-        with patch("vibescan.dashboard.login", side_effect=ValueError("PRIVATE-CODE")),                 patch("vibescan.dashboard.status", side_effect=OSError("PRIVATE-PATH")):
+        with patch("vibescan.dashboard.login", side_effect=ValueError("PRIVATE-CODE")), \
+                patch("vibescan.dashboard.status", side_effect=OSError("PRIVATE-PATH")):
             self.client.post("/api/login", headers=self.headers, json={})
             data = self.wait_login()
             self.assertEqual((data["state"], data["login"]["state"]), ("login", "failed"))
             self.assertNotIn("PRIVATE", json.dumps(data))
+
+    def test_github_url_is_cloned_validated_and_refreshed_before_rescan(self):
+        remote = self.root.parent / "remote"
+        source = remote / "owner" / "demo"
+        source.parent.mkdir(parents=True)
+        shutil.move(self.repository(), source)
+        # Redirect github.com to the local folder so clone and fetch run for real without a network.
+        redirect = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": f"url.{remote.as_uri()}/.insteadOf",
+                    "GIT_CONFIG_VALUE_0": "https://github.com/"}
+        with patch.dict(os.environ, redirect):
+            for url in ("https://github.com/owner", "https://gitlab.com/owner/demo", "https://github.com/owner/..",
+                        "https://github.com/owner/demo/extra", "http://github.com/owner/demo"):
+                response = self.client.post("/api/repos", headers=self.headers, json={"path": url})
+                self.assertEqual(response.status_code, 422, url)
+                self.assertIn("형식", response.json()["detail"])
+            response = self.client.post("/api/repos", headers=self.headers, json={"path": "https://github.com/owner/missing"})
+            self.assertEqual(response.status_code, 422)
+            self.assertIn("복제하지 못했습니다", response.json()["detail"])
+            self.assertFalse((self.directory / "github/owner/missing").exists())
+
+            response = self.client.post("/api/repos", headers=self.headers, json={"path": "https://github.com/owner/demo"})
+            self.assertEqual(response.status_code, 200, response.text)
+            clone = self.directory.resolve() / "github" / "owner" / "demo"
+            self.assertEqual(response.json()["path"], str(clone))
+            again = self.client.post("/api/repos", headers=self.headers, json={"path": " git@github.com:owner/demo.git "})
+            self.assertEqual(again.json()["path"], str(clone))
+
+            (source / "app.py").write_text('API_TOKEN = "test-credential-newer"\n')
+            head = self.commit(source)
+            with patch("vibescan.cli.access_token") as token:
+                self.client.post("/api/scan", headers=self.headers, json={"path": str(clone)})
+                job = self.wait_scan()
+                token.assert_not_called()
+            self.assertEqual(job["state"], "completed", job)
+            self.assertEqual(self.client.get("/api/scans/" + job["scan_id"], headers=self.headers).json()["commit"], head)
+
+            source.rename(source.with_name("moved"))  # git objects are read-only, so rmtree fails on Windows
+            self.client.post("/api/scan", headers=self.headers, json={"path": str(clone)})
+            job = self.wait_scan()
+            self.assertEqual(job["state"], "failed")
+            self.assertIn("최신 커밋", job["message"])
+
+    def test_fixable_engine_error_is_shown_but_others_stay_generic(self):
+        repo = self.repository()
+        self.client.post("/api/repos", headers=self.headers, json={"path": str(repo)})
+        for error, shown in ((cli.ScanInputError("검사 가능한 텍스트 파일이 없습니다."), "텍스트 파일이 없습니다"),
+                             (ValueError("PRIVATE-SOURCE"), "스캔에 실패했습니다")):
+            with patch("vibescan.dashboard.scan", side_effect=error):
+                self.client.post("/api/scan", headers=self.headers, json={"path": str(repo)})
+                job = self.wait_scan()
+            self.assertEqual(job["state"], "failed")
+            self.assertIn(shown, job["message"])
+            self.assertNotIn("PRIVATE", job["message"])
+
+    def test_logout_forgets_tokens_and_reports_status(self):
+        self.assertEqual(self.client.post("/api/logout", json={}).status_code, 403)
+        with patch("vibescan.dashboard.logout") as forget, \
+                patch("vibescan.dashboard.status", return_value={"state": "login", "message": "로그인 필요"}):
+            data = self.client.post("/api/logout", headers=self.headers, json={}).json()
+            forget.assert_called_once_with(self.directory.resolve())
+            self.assertEqual(data["state"], "login")
+        with patch("vibescan.dashboard.logout", side_effect=OSError("PRIVATE-PATH")):
+            response = self.client.post("/api/logout", headers=self.headers, json={})
+            self.assertEqual(response.status_code, 503)
+            self.assertNotIn("PRIVATE", response.text)

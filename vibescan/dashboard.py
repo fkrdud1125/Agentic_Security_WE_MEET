@@ -4,6 +4,7 @@ import asyncio
 import os
 import re
 import secrets
+import shutil
 import socket
 import sqlite3
 import subprocess
@@ -20,12 +21,19 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from scanner.ingest import git
 from scanner.models import ScanResult
-from .cli import scan
+from .cli import ScanInputError, scan
 from .login import login
 from .register import data_dir
-from .session import status
+from .session import logout, status
 
 ASSETS = Path(__file__).with_name("web")
+GITHUB = re.compile(r"(?:https://github\.com/|git@github\.com:)([A-Za-z0-9][A-Za-z0-9-]{0,38})/([A-Za-z0-9._-]{1,100}?)(?:\.git)?/?")
+
+
+def run_git(*args, cwd=None):
+    # No prompts: private repos rely on the PC's existing Git credentials (SSH key or credential helper).
+    subprocess.run(["git", *args], cwd=cwd, check=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL, timeout=300, env=os.environ | {"GIT_TERMINAL_PROMPT": "0"})
 
 
 class RepoInput(BaseModel):
@@ -41,7 +49,9 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
     root = results.expanduser().resolve()
     directory = (directory or data_dir()).expanduser().resolve()
     database = directory / "scan-history.sqlite3"
+    clones = directory / "github"
     lock = threading.Lock()
+    cloning = threading.Lock()
     job = {"state": "idle"}
     sign_in = {"state": "idle"}
     worker = None
@@ -90,9 +100,33 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
         except (OSError, sqlite3.Error):
             raise HTTPException(503, "연결된 레포 목록을 읽을 수 없습니다.") from None
 
+    def clone(url):
+        match = GITHUB.fullmatch(url)
+        if not match or match[2] in (".", ".."):
+            raise HTTPException(422, "GitHub 주소는 https://github.com/소유자/저장소 형식이어야 합니다.")
+        dest = clones / match[1] / match[2]
+        if dest.exists():
+            return dest  # already cloned: reconnect, rescans fetch the latest commit
+        if not cloning.acquire(blocking=False):
+            raise HTTPException(409, "다른 저장소를 복제하는 중입니다. 완료 후 다시 시도하세요.")
+        try:
+            dest.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            run_git("clone", "--depth", "1", "--no-tags", "--", url, str(dest))
+        except subprocess.TimeoutExpired:
+            shutil.rmtree(dest, ignore_errors=True)
+            raise HTTPException(504, "복제 시간(5분)이 초과되었습니다. 저장소 크기와 네트워크를 확인하세요.") from None
+        except (subprocess.CalledProcessError, OSError):
+            shutil.rmtree(dest, ignore_errors=True)
+            raise HTTPException(422, "GitHub 저장소를 복제하지 못했습니다. 주소와 네트워크를 확인하세요. "
+                                     "비공개 저장소는 이 PC의 Git 인증(SSH 키·자격 증명)이 필요합니다.") from None
+        finally:
+            cloning.release()
+        return dest
+
     @app.post("/api/repos")
     def connect_repo(body: RepoInput):
-        repo = repository(body.path)
+        raw = body.path.strip()
+        repo = repository(clone(raw) if raw.startswith(("https://", "http://", "git@")) else raw)
         try:
             directory.mkdir(mode=0o700, parents=True, exist_ok=True)
             with closing(sqlite3.connect(database)) as db, db:
@@ -105,10 +139,22 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
     def run_scan(repo, offline):
         nonlocal job
         try:
+            if Path(repo).is_relative_to(clones):
+                # VibeScan owns these clones, so a hard reset to the remote HEAD discards nothing of the user's.
+                run_git("fetch", "--depth", "1", "--no-tags", "origin", "HEAD", cwd=repo)
+                run_git("reset", "--hard", "--quiet", "FETCH_HEAD", cwd=repo)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+            with lock:
+                job = {"state": "failed", "repo": repo, "message": "GitHub에서 최신 커밋을 가져오지 못했습니다. "
+                       "네트워크와 저장소 접근 권한을 확인하세요. 기존 결과는 유지됩니다."}
+            return
+        try:
             folder, note, issue = scan(Path(repo), root, directory, offline=offline)
             completed = {"state": "completed", "repo": repo, "scan_id": folder.name, "message": note, "issue": issue}
         except subprocess.TimeoutExpired:
             completed = {"state": "failed", "repo": repo, "message": "검사 시간이 초과되었습니다. 기존 결과는 유지됩니다."}
+        except ScanInputError as exc:
+            completed = {"state": "failed", "repo": repo, "message": f"{exc} 기존 결과는 유지됩니다."}
         except Exception:
             # Engine/provider exceptions must not expose source text or credentials through HTTP.
             completed = {"state": "failed", "repo": repo,
@@ -165,6 +211,17 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
             state = {"state": "login", "message": "로그인 정보를 읽을 수 없습니다. 다시 로그인하세요."}
         with lock:
             return state | {"login": dict(sign_in)}
+
+    @app.post("/api/logout")
+    def sign_out():
+        with lock:
+            if sign_in["state"] == "running":
+                raise HTTPException(409, "로그인 진행 중에는 로그아웃할 수 없습니다.")
+        try:
+            logout(directory)
+        except Exception:
+            raise HTTPException(503, "로그아웃하지 못했습니다. 다시 시도하세요.") from None
+        return auth()
 
     @app.post("/api/login", status_code=202)
     def start_login():

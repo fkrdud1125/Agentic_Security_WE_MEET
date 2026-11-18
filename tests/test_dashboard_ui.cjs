@@ -93,10 +93,12 @@ async function scanFlow() {
   context.fetch = authFetch({state:'register', message:'register first', login:{state:'idle'}});
   await vm.runInContext('loadAuth()', context);
   assert.equal(get('login').hidden, true);
+  assert.equal(get('logout').hidden, true);
   context.fetch = authFetch({state:'ready', message:'연결됨', login:{state:'idle'}});
   await vm.runInContext('loadAuth()', context);
   assert.equal(get('use-model').disabled, false);
   assert.equal(get('login').textContent, '다시 로그인');
+  assert.equal(get('logout').hidden, false);
 
   context.fetch = async url => ({ok: true, json: async () => url === '/api/scan'
     ? {state:'completed', scan_id:'new-scan', message:'모델 응답 생성 실패', issue:'limit'}

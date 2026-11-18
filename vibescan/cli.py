@@ -67,11 +67,15 @@ def render(result):
     return "\n".join(rows) + "\n"
 
 
+class ScanInputError(ValueError):
+    """A scan the user can fix; its message is safe to show in the dashboard."""
+
+
 def scan(repo, output, directory, offline=False):
     repo = repo.expanduser().resolve()
     output = output.expanduser().resolve()
     if output.is_relative_to(repo) or directory.resolve().is_relative_to(repo):
-        raise ValueError("결과와 이력은 검사 대상 저장소 밖에 저장해야 합니다.")
+        raise ScanInputError("결과와 이력은 검사 대상 저장소 밖에 저장해야 합니다.")
     scan_id = uuid.uuid4().hex
     coverage = analysis.default_coverage()
     note = "로컬 규칙으로 작성"
@@ -81,7 +85,7 @@ def scan(repo, output, directory, offline=False):
         source = Path(temp)
         commit, branch, files = snapshot(repo, source)
         if not files:
-            raise ValueError("제외 규칙 적용 후 검사 가능한 텍스트 파일이 없습니다.")
+            raise ScanInputError("제외 규칙 적용 후 검사 가능한 텍스트 파일이 없습니다.")
         app = profile(source, files)
         context = Context(source, files)
         app.limitations = ["Python 소스 정찰 및 제한된 정적 규칙 검사입니다. 동적 검사는 수행하지 않았습니다."]

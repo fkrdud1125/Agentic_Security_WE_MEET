@@ -221,6 +221,7 @@ async function pollJob() {
 $("connect-form").addEventListener("submit", async event => {
   event.preventDefault();
   $("connect").disabled = true;
+  if (/^(https?:\/\/|git@)/.test($("repo-path").value.trim())) jobMessage("GitHub에서 저장소를 복제하는 중입니다. 저장소 크기에 따라 몇 분 걸릴 수 있습니다.");
   try {
     const repo = await api("/api/repos", {path: $("repo-path").value});
     await loadRepos(repo.path);
@@ -239,6 +240,8 @@ async function loadAuth() {
     $("login").hidden = auth.state === "register";
     $("login").disabled = running;
     $("login").textContent = auth.state === "ready" ? "다시 로그인" : "ChatGPT로 로그인";
+    $("logout").hidden = !["ready", "plan"].includes(auth.state);
+    $("logout").disabled = running;
     if (auth.state !== "ready") $("use-model").checked = false;
     if (running) authTimer = setTimeout(loadAuth, 1500);
   } catch (error) {
@@ -251,6 +254,12 @@ async function loadAuth() {
 $("login").addEventListener("click", async () => {
   $("login").disabled = true;
   try { await api("/api/login", {}); }
+  catch (error) { $("auth-status").textContent = error.message; $("auth-status").classList.add("error"); }
+  await loadAuth();
+});
+$("logout").addEventListener("click", async () => {
+  $("logout").disabled = true;
+  try { await api("/api/logout", {}); }
   catch (error) { $("auth-status").textContent = error.message; $("auth-status").classList.add("error"); }
   await loadAuth();
 });

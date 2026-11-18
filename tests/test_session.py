@@ -122,6 +122,9 @@ class SessionTests(unittest.TestCase):
             ready = {"sub": "s", "scope": session.PLAN, "access_token": "a", "expires_at": time.time() - 10}
             self.assertEqual(saved(ready | {"refresh_token": "r"}), "ready")
             self.assertEqual(saved(ready), "login")
+            saved(ready | {"refresh_token": "r"})
+            session.logout(self.directory)
+            self.assertEqual(session.status(self.directory)["state"], "login")
             remote.assert_not_called()
         with patch("vibescan.session.registration", side_effect=session.SessionError("register first", "register")):
             self.assertEqual(session.status(self.directory)["state"], "register")

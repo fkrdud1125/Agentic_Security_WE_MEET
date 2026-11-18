@@ -161,3 +161,10 @@ def status(directory):
     if record["expires_at"] <= time.time() + 60 and not record.get("refresh_token"):
         return {"state": "login", "message": "세션이 만료되었습니다. 다시 로그인하세요."}
     return {"state": "ready", "message": "ChatGPT 연결됨 · 구독 사용 가능"}
+
+
+def logout(directory):
+    """Forget this PC's saved ChatGPT tokens; the app connection in ChatGPT settings is unchanged."""
+    _, client = registration(directory)
+    with transaction(directory) as db:
+        db.execute("DELETE FROM sessions WHERE client=?", (client,))
