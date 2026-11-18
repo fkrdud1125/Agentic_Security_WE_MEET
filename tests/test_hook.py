@@ -9,6 +9,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import ANY, patch
 
+from scanner.history import list_scans
 from scanner.models import Trigger
 from vibescan import hook
 
@@ -17,7 +18,8 @@ GIT = ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "c
 
 class HookTests(unittest.TestCase):
     def setUp(self):
-        temp = TemporaryDirectory()
+        # The detached hook process may still be exiting on Windows when a test ends.
+        temp = TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(temp.cleanup)
         self.base = Path(temp.name)
         self.repo = self.base / "repo"
@@ -88,8 +90,12 @@ class HookTests(unittest.TestCase):
             time.sleep(0.5)
             results = list((state / "scans").glob("*/scan_result.json"))
         self.assertTrue(results, (state / "hook.log").read_text(encoding="utf-8") if (state / "hook.log").exists() else "no log")
+        # The result file lands before the history save; wait for the hook's last step so Windows can delete the folder.
+        while (state / "live.json").exists() and time.monotonic() < deadline:
+            time.sleep(0.2)
         data = json.loads(results[0].read_text(encoding="utf-8"))
         self.assertEqual((data["commit"], data["trigger"]), (head, "git-hook"))
+        self.assertEqual(len(list_scans(state / "scan-history.sqlite3", str(self.repo.resolve()))), 1)
         self.assertNotIn("test-credential-", json.dumps(data))
 
     def test_trigger_follows_consent_and_clears_its_live_progress(self):
