@@ -15,6 +15,7 @@ let pollTimer = null;
 let jobVersion = 0;
 let auth = null;
 let authTimer = null;
+let loginRequested = false;
 
 function node(tag, text, className) {
   const item = document.createElement(tag);
@@ -243,7 +244,9 @@ async function loadAuth() {
     $("logout").hidden = !["ready", "plan"].includes(auth.state);
     $("logout").disabled = running;
     if (auth.state !== "ready") $("use-model").checked = false;
-    if (running) authTimer = setTimeout(loadAuth, 1500);
+    // Only the tab that pressed the button follows the login; ChatGPT sends it back here afterwards.
+    if (running && loginRequested && auth.login.url) return location.assign(auth.login.url);
+    if (running) authTimer = setTimeout(loadAuth, loginRequested ? 300 : 1500);
   } catch (error) {
     auth = null;
     $("auth-status").textContent = error.message;
@@ -253,7 +256,7 @@ async function loadAuth() {
 }
 $("login").addEventListener("click", async () => {
   $("login").disabled = true;
-  try { await api("/api/login", {}); }
+  try { await api("/api/login", {}); loginRequested = true; }
   catch (error) { $("auth-status").textContent = error.message; $("auth-status").classList.add("error"); }
   await loadAuth();
 });

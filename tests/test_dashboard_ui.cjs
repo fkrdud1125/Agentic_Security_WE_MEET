@@ -100,6 +100,16 @@ async function scanFlow() {
   assert.equal(get('login').textContent, '다시 로그인');
   assert.equal(get('logout').hidden, false);
 
+  const visited = [];
+  context.location.assign = url => visited.push(url);
+  const loginUrl = 'http://127.0.0.1:9999/auth/login?key=k';
+  context.fetch = authFetch({state:'ready', message:'연결됨', login:{state:'running', message:'진행', url:loginUrl}});
+  await vm.runInContext('loadAuth()', context);
+  assert.deepEqual(visited, []);  // a tab that did not press the button stays put
+  await get('login').handlers.click();
+  assert.deepEqual(visited, [loginUrl]);
+  vm.runInContext('loginRequested = false', context);
+
   context.fetch = async url => ({ok: true, json: async () => url === '/api/scan'
     ? {state:'completed', scan_id:'new-scan', message:'모델 응답 생성 실패', issue:'limit'}
     : url === '/api/auth' ? {state:'ready', message:'연결됨', login:{state:'idle'}}

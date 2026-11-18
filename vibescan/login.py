@@ -14,7 +14,7 @@ from .register import authorization_url
 from .session import complete_login, read_record, registration, transaction
 
 
-def login_app(directory, address, ticket):
+def login_app(directory, address, ticket, done=None):
     host, client = registration(directory)
     redirect = f"http://{address}/auth/callback"
     pending = None
@@ -59,17 +59,20 @@ def login_app(directory, address, ticket):
                 # Provider exceptions may contain a URL, token, or authorization code.
                 app.state.result = (False, "토큰 교환 또는 계정 검증에 실패했습니다. 다시 로그인하세요.")
         ok, message = app.state.result
+        if done:
+            # Back to the dashboard tab, which shows the result from its own login status.
+            return RedirectResponse(done, 303)
         return PlainTextResponse(message, 200 if ok else 400)
 
     return app
 
 
-def login(directory):
+def login(directory, open_url=webbrowser.open, done=None):
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         address = f"127.0.0.1:{sock.getsockname()[1]}"
         ticket = secrets.token_urlsafe(32)
-        app = login_app(directory, address, ticket)
+        app = login_app(directory, address, ticket, done)
         server = uvicorn.Server(uvicorn.Config(app, access_log=False, log_level="critical",
                                               proxy_headers=False))
         sock.listen()
@@ -79,7 +82,7 @@ def login(directory):
             deadline = time.monotonic() + 300
             while not server.started and worker.is_alive() and time.monotonic() < deadline:
                 time.sleep(0.05)
-            if not server.started or not webbrowser.open(f"http://{address}/auth/login?key={ticket}"):
+            if not server.started or not open_url(f"http://{address}/auth/login?key={ticket}"):
                 raise RuntimeError("로컬 로그인 창을 열 수 없습니다.")
             while not app.state.result and worker.is_alive() and time.monotonic() < deadline:
                 time.sleep(0.1)

@@ -243,8 +243,10 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/auth", headers=self.headers).json()["state"], "register")
         release = threading.Event()
 
-        def signed_in(directory):
+        def signed_in(directory, open_url, done):
             self.assertEqual(directory, self.directory.resolve())
+            self.assertEqual(done, "http://127.0.0.1:8765/")
+            self.assertTrue(open_url("http://127.0.0.1:9999/auth/login?key=k"))
             release.wait(5)
             return "로그인 완료 · 구독 사용 가능"
 
@@ -253,6 +255,10 @@ class DashboardTests(unittest.TestCase):
             try:
                 self.assertEqual(self.client.post("/api/login", headers=self.headers, json={}).status_code, 202)
                 self.assertEqual(self.client.post("/api/login", headers=self.headers, json={}).status_code, 409)
+                deadline = time.monotonic() + 5
+                while "url" not in self.client.get("/api/auth", headers=self.headers).json()["login"]:
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(0.02)
             finally:
                 release.set()
             data = self.wait_login()

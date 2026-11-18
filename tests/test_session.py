@@ -56,6 +56,13 @@ class SessionTests(unittest.TestCase):
                 self.assertEqual(exchange.call_args.kwargs["redirect_uri"], args["redirect_uri"][0])
             self.assertEqual(session.access_token(self.directory), "access")
 
+        with patch("vibescan.login.registration", return_value=("host", "issued")):
+            app = login_app(self.directory, "127.0.0.1:8765", "ticket", "http://127.0.0.1:9000/")
+        with TestClient(app, base_url="http://127.0.0.1:8765", follow_redirects=False) as http:
+            args = parse_qs(urlsplit(http.get("/auth/login?key=ticket").headers["location"]).query)
+            response = http.get("/auth/callback", params={"state": args["state"][0], "error": "access_denied"})
+            self.assertEqual((response.status_code, response.headers["location"]), (303, "http://127.0.0.1:9000/"))
+
         # Continue from that saved session, using the real Git and Semgrep binaries.
         repo = self.directory / "sample"
         repo.mkdir()

@@ -192,8 +192,15 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
 
     def run_login():
         nonlocal sign_in
+
+        def in_dashboard_tab(url):
+            # The dashboard tab navigates here itself, so no second browser tab is opened.
+            with lock:
+                sign_in["url"] = url
+            return True
+
         try:
-            done = {"state": "completed", "message": login(directory)}
+            done = {"state": "completed", "message": login(directory, in_dashboard_tab, f"http://{address}/")}
         except RuntimeError as exc:
             # login() and SessionError messages are written by VibeScan and hold no tokens.
             done = {"state": "failed", "message": str(exc)}
