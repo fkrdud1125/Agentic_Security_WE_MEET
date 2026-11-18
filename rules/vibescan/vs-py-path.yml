@@ -1,0 +1,74 @@
+{
+  "rules": [
+    {
+      "id": "vs-py-path",
+      "languages": [
+        "python"
+      ],
+      "severity": "WARNING",
+      "message": "입력값을 사용한 파일 접근",
+      "metadata": {
+        "cwe": "CWE-22",
+        "kisa": [
+          "CI-15"
+        ],
+        "vibescan": {
+          "title_ko": "입력값을 사용한 파일 접근",
+          "remediation_ko": "정규화된 경로가 기준 디렉터리 내부인지 검사하세요.",
+          "severity": "High",
+          "confidence": "Likely"
+        }
+      },
+      "mode": "taint",
+      "pattern-sources": [
+        {
+          "pattern-either": [
+            {
+              "pattern": "flask.request.$ATTR"
+            },
+            {
+              "pattern": "flask.request.$ATTR[...]"
+            },
+            {
+              "pattern": "flask.request.$ATTR.get(...)"
+            }
+          ]
+        }
+      ],
+      "pattern-sinks": [
+        {
+          "patterns": [
+            {
+              "pattern-either": [
+                {
+                  "pattern": "flask.send_file($X, ...)"
+                },
+                {
+                  "pattern": "open($X, ...)"
+                },
+                {
+                  "pattern": "starlette.responses.FileResponse($X, ...)"
+                }
+              ]
+            },
+            {
+              "focus-metavariable": "$X"
+            }
+          ]
+        }
+      ],
+      "pattern-sanitizers": [
+        {
+          "pattern-either": [
+            {
+              "pattern": "werkzeug.utils.secure_filename(...)"
+            },
+            {
+              "pattern": "werkzeug.security.safe_join(...)"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

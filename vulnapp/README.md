@@ -23,15 +23,16 @@ SQL과 HTML 표본은 정적 검사 대상입니다. HTTP 입력에서 해당 �
 
 ### Semgrep으로 정적 표본 확인
 
-저장소 루트에서 다음 순서로 실행합니다. 규칙은 저장소의 `rules/sample.yml`을 사용합니다.
+저장소 루트에서 실행합니다. 현재 규칙은 `rules/vibescan/`에 있으며 시크릿·쿠키·라우트 자체 검사는 VibeScan CLI를 통해 함께 실행합니다.
 
 ```sh
 python -m pip install semgrep==1.185.0
-semgrep scan --metrics=off --disable-version-check --no-rewrite-rule-ids --config rules/sample.yml --json-output=semgrep-sample.local.json vulnapp
-python tests/verify_semgrep_sample.py semgrep-sample.local.json
+semgrep scan --metrics=off --disable-version-check --no-rewrite-rule-ids --config rules/vibescan --json-output=semgrep-sample.local.json vulnapp
+python -m bench.check_rules
+python -m bench.run
 ```
 
-기준 실행에서는 `app.py:8`의 토큰 대입, `static_cases.py:8`의 SQL 실행, `static_cases.py:12`의 마크업 변환을 각각 한 건씩 탐지했습니다. 이 세 규칙은 샘플의 정적 패턴을 확인합니다. 아래 Flask 테스트는 익명 접근과 실제 응답 헤더·쿠키를 확인합니다.
+초기 세 규칙의 결과는 `tests/fixtures/semgrep-sample.json`에 역사적 표본으로 남아 있습니다. 현재 CLI는 시크릿·SQL·마크업에 더해 쿠키 보호 속성 후보도 보고합니다. 현재 회귀 기준은 발견 수 고정값이 아니라 `bench/ground_truth.yml`의 취약/안전 표본 대조입니다. 아래 Flask 테스트는 익명 접근과 실제 응답 헤더·쿠키를 확인합니다.
 
 ### 독립 Git 저장소로 사용
 

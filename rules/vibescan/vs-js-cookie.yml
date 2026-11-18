@@ -1,0 +1,37 @@
+{
+  "rules": [
+    {
+      "id": "vs-js-cookie",
+      "languages": [
+        "javascript",
+        "typescript"
+      ],
+      "severity": "WARNING",
+      "message": "쿠키 보호 속성 비활성화",
+      "metadata": {
+        "cwe": "CWE-614",
+        "kisa": [
+          "CI-16",
+          "CI-18"
+        ],
+        "vibescan": {
+          "title_ko": "쿠키 보호 속성 비활성화",
+          "remediation_ko": "인증 쿠키의 Secure·HttpOnly·SameSite를 설정하세요.",
+          "severity": "Medium",
+          "confidence": "Potential"
+        }
+      },
+      "pattern-either": [
+        {
+          "pattern": "$RES.cookie($NAME, $VALUE)"
+        },
+        {
+          "pattern": " $RES.cookie(..., {..., httpOnly: false, ...})"
+        },
+        {
+          "pattern": "$RES.cookie(..., {..., secure: false, ...})"
+        }
+      ]
+    }
+  ]
+}

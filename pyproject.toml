@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vibescan"
-version = "0.1.0"
+version = "0.2.0"
 description = "로컬 Git 저장소용 웹앱 보안 진단기"
 requires-python = ">=3.11"
 dependencies = [
@@ -17,10 +17,11 @@ dependencies = [
 vibescan = "vibescan.cli:main"
 
 [tool.setuptools]
-packages = ["scanner", "vibescan"]
+packages = ["scanner", "scanner.detectors", "vibescan"]
 
 [tool.setuptools.package-data]
 vibescan = ["web/*.html", "web/*.css", "web/*.js"]
 
 [tool.setuptools.data-files]
-"share/vibescan" = ["rules/sample.yml"]
+"share/vibescan" = ["rules/catalog/kisa-2026-web.yml"]
+"share/vibescan/rules" = ["rules/vibescan/*.yml"]

@@ -1,0 +1,65 @@
+{
+  "rules": [
+    {
+      "id": "vs-py-sql",
+      "languages": [
+        "python"
+      ],
+      "severity": "WARNING",
+      "message": "외부 입력이 SQL에 도달",
+      "metadata": {
+        "cwe": "CWE-89",
+        "kisa": [
+          "CI-02"
+        ],
+        "vibescan": {
+          "title_ko": "외부 입력이 SQL에 도달",
+          "remediation_ko": "SQL 본문에 입력을 결합하지 말고 드라이버의 매개변수 바인딩을 사용하세요.",
+          "severity": "High",
+          "confidence": "Likely"
+        }
+      },
+      "mode": "taint",
+      "pattern-sources": [
+        {
+          "pattern-either": [
+            {
+              "pattern": "flask.request.$ATTR"
+            },
+            {
+              "pattern": "flask.request.$ATTR[...]"
+            },
+            {
+              "pattern": "flask.request.$ATTR.get(...)"
+            }
+          ]
+        }
+      ],
+      "pattern-sinks": [
+        {
+          "patterns": [
+            {
+              "pattern-either": [
+                {
+                  "pattern": "$DB.execute($X, ...)"
+                },
+                {
+                  "pattern": "$DB.executemany($X, ...)"
+                },
+                {
+                  "pattern": "sqlalchemy.text($X)"
+                },
+                {
+                  "pattern": "$DB.raw($X, ...)"
+                }
+              ]
+            },
+            {
+              "focus-metavariable": "$X"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

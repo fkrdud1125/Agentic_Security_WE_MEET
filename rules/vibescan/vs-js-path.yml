@@ -1,0 +1,69 @@
+{
+  "rules": [
+    {
+      "id": "vs-js-path",
+      "languages": [
+        "javascript",
+        "typescript"
+      ],
+      "severity": "WARNING",
+      "message": "입력값을 사용한 파일 접근",
+      "metadata": {
+        "cwe": "CWE-22",
+        "kisa": [
+          "CI-15"
+        ],
+        "vibescan": {
+          "title_ko": "입력값을 사용한 파일 접근",
+          "remediation_ko": "기준 디렉터리 안의 파일만 허용하세요.",
+          "severity": "High",
+          "confidence": "Likely"
+        }
+      },
+      "mode": "taint",
+      "pattern-sources": [
+        {
+          "pattern-either": [
+            {
+              "pattern": "$REQ.query.$X"
+            },
+            {
+              "pattern": "$REQ.body.$X"
+            },
+            {
+              "pattern": "$REQ.params.$X"
+            },
+            {
+              "pattern": "location.hash"
+            },
+            {
+              "pattern": "location.search"
+            }
+          ]
+        }
+      ],
+      "pattern-sinks": [
+        {
+          "patterns": [
+            {
+              "pattern-either": [
+                {
+                  "pattern": "$RES.sendFile($X, ...)"
+                },
+                {
+                  "pattern": "fs.readFile($X, ...)"
+                },
+                {
+                  "pattern": "fs.readFileSync($X, ...)"
+                }
+              ]
+            },
+            {
+              "focus-metavariable": "$X"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

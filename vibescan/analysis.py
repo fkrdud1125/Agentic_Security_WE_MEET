@@ -6,9 +6,9 @@ from scanner.models import Confidence, Severity, Status
 from . import inference
 
 CHECKS = {
-    "secrets": ("하드코딩 시크릿", "static", "텍스트 시크릿 패턴 및 Python 리터럴 규칙"),
-    "sql": ("SQL 문자열 결합", "static", "Python Semgrep 문자열 결합 규칙"),
-    "xss": ("HTML 이스케이프 생략", "static", "Python Semgrep Markup 규칙"),
+    "secrets": ("하드코딩 시크릿", "static", "공급자 패턴·이름·Python 리터럴 및 민감 파일 메타 검사"),
+    "sql": ("SQL 문자열 결합", "static", "Python·JS/TS Semgrep 입력→SQL 규칙"),
+    "xss": ("HTML 이스케이프 생략", "static", "Python·JS/TS·템플릿의 자동 이스케이프 우회 규칙"),
     "auth": ("인증·인가 정책 확인", "manual", "업무별 권한 정책과 실제 호출 경로 확인 필요"),
     "headers": ("응답 헤더·쿠키 확인", "manual", "실행 URL의 동적 검사는 후속 범위"),
 }

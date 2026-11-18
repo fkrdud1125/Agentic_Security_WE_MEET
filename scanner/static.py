@@ -2,70 +2,17 @@
 
 import ast
 import io
-import json
-import os
 import re
-import shutil
-import subprocess
-import sysconfig
 import tokenize
-from pathlib import Path
 
-from .models import AppProfile, Confidence, Finding, Location, Severity
+from .models import AppProfile
+from .detectors import secrets, config, routes
+from .detectors.semgrep import convert, semgrep
+from .normalize import RawHit, normalize, code_identity
 
 
 # Only structural syntax from a matched line enters reports or model input.
 VISIBLE_NAMES = {"return", "def", "if", "else", "execute", "fetchone", "Markup", "True", "False", "None"}
-SECRET = re.compile(r"""(?ix)["']?\b[\w.-]*(?:api[_-]?key|secret|password|token)\b["']?\s*[:=]\s*["']([^"'\r\n]{8,})["']""")
-KEY = re.compile(r"\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,})")
-SENSITIVE = re.compile(r"api.?key|secret|password|token|credential|authorization|private.?key", re.I)
-DETAILS = {
-    "literal-token": ("소스에 포함된 인증정보 후보", "CWE-798", "A07:2021", Severity.HIGH,
-                      "코드 열람자에게 인증정보가 노출될 수 있습니다.",
-                      "실제 값인지 확인한 뒤 키를 교체하고 환경변수에서 읽으세요.",
-                      '- API_TOKEN = "[가림]"\n+ API_TOKEN = os.environ["API_TOKEN"]'),
-    "concatenated-select": ("문자열을 결합한 SQL 실행", "CWE-89", "A03:2021", Severity.HIGH,
-                            "외부 입력이 연결되면 쿼리의 의미가 달라질 수 있습니다.",
-                            "DB 드라이버가 제공하는 매개변수 바인딩을 사용하세요. 아래는 SQLite 예시입니다.",
-                            '- connection.execute(query)\n+ connection.execute("SELECT title FROM notes WHERE title = ?", (title,))'),
-    "unescaped-markup": ("이스케이프를 생략한 마크업", "CWE-79", "A03:2021", Severity.MEDIUM,
-                         "외부 입력이 HTML 응답에 도달하면 브라우저가 마크업을 해석할 수 있습니다.",
-                         "템플릿의 자동 이스케이프를 유지하거나 값을 HTML 문맥에 맞게 이스케이프하세요.",
-                         "- return Markup(title)\n+ return markupsafe.escape(title)"),
-}
-
-
-def sensitive_literals(tree):
-    """Find literal values under credential assignments, dict keys and keyword arguments."""
-    literals = []
-    for node in ast.walk(tree):
-        values = []
-        if isinstance(node, (ast.Assign, ast.AnnAssign)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            if any(SENSITIVE.search(ast.unparse(t)) for t in targets) and node.value is not None:
-                values.append(node.value)
-        if isinstance(node, ast.keyword) and node.arg and SENSITIVE.search(node.arg):
-            values.append(node.value)
-        if isinstance(node, ast.Dict):
-            values.extend(v for k, v in zip(node.keys, node.values)
-                          if isinstance(k, ast.Constant) and isinstance(k.value, str) and SENSITIVE.search(k.value))
-        for value in values:
-            pending = [value]
-            while pending:
-                candidate = pending.pop()
-                if isinstance(candidate, ast.Constant) and isinstance(candidate.value, str):
-                    literals.append(candidate)
-                elif isinstance(candidate, ast.JoinedStr):
-                    literals.append(candidate)
-                    pending.extend(candidate.values)
-                elif isinstance(candidate, (ast.BinOp, ast.Tuple, ast.List)):
-                    pending.extend(ast.iter_child_nodes(candidate))
-                elif (isinstance(candidate, ast.Call) and isinstance(candidate.func, ast.Attribute)
-                      and (candidate.func.attr == "getenv" or
-                           candidate.func.attr == "get" and ast.unparse(candidate.func.value).endswith("environ"))):
-                    pending.extend(candidate.args[1:2])
-                    pending.extend(k.value for k in candidate.keywords if k.arg == "default")
-    return literals
 
 
 def masked_line(line):
@@ -84,6 +31,10 @@ def profile(directory, files):
     auth_signals = set()
     for name in files:
         if not name.endswith(".py"):
+            if name.endswith(('.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs')) and re.search(
+                r'''\b(?:from\s*['"]express['"]|require\(\s*['"]express['"]\s*\))''',
+                (directory / name).read_text(encoding='utf-8-sig')):
+                frameworks.add('Express')
             continue
         try:
             tree = ast.parse((directory / name).read_text(encoding="utf-8-sig"))
@@ -107,55 +58,48 @@ def profile(directory, files):
     return AppProfile(", ".join(sorted(frameworks)) or None, routes, auth)
 
 
-def semgrep(directory):
-    scripts = Path(sysconfig.get_path("scripts"))
-    binary = shutil.which("semgrep", path=str(scripts)) or shutil.which("semgrep")
-    if not binary:
-        raise RuntimeError("Semgrep을 찾을 수 없습니다. VibeScan 설치 환경을 확인하세요.")
-    rules = Path(__file__).resolve().parents[1] / "rules" / "sample.yml"
-    if not rules.is_file():
-        rules = Path(sysconfig.get_path("data")) / "share/vibescan/sample.yml"
-    command = [binary, "scan", "--metrics=off", "--disable-version-check", "--no-git-ignore",
-               "--no-rewrite-rule-ids", "--strict", "--config", str(rules), "--json", "."]
-    run = subprocess.run(command, cwd=directory, capture_output=True, timeout=180,
-                         env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
-    if run.returncode:
-        raise RuntimeError(f"Semgrep 실행 실패 (종료 코드 {run.returncode}).")
-    data = json.loads(run.stdout)
-    if data["errors"] or data.get("skipped_rules"):
-        raise RuntimeError("Semgrep이 소스 또는 규칙 일부를 분석하지 못했습니다.")
-    return data["results"]
+class Inspection(list):
+    def __init__(self, findings, partial_files, route_rows, settings):
+        super().__init__(findings)
+        self.partial_files = sorted(set(partial_files))
+        self.routes = route_rows
+        self.config_summary = settings
 
 
 def inspect(directory, files):
-    indexed = {}
     allowed = set(files)
-    hits = semgrep(directory) if any(f.endswith(".py") for f in files) else []
-    for hit in hits:
-        name = Path(hit["path"]).as_posix()
-        if name not in allowed or hit["check_id"] not in DETAILS:
-            raise ValueError("Semgrep 결과의 파일 또는 규칙이 검사 범위 밖입니다.")
-        indexed[(name, hit["start"]["line"], hit["check_id"])] = ["static:semgrep"]
-    matched_lines = {(name, line) for name, line, _ in indexed}
-    excerpts = {}
-    for name in files:
-        content = (directory / name).read_text(encoding="utf-8")
-        secret_lines = set()
-        if name.endswith(".py"):
+    matched = semgrep(directory) if files else []
+    raw = [convert(hit, allowed) for hit in matched]
+    partial = list(getattr(matched, 'partial_files', []))
+    if any(name not in allowed for name in partial):
+        raise ValueError('부분 실패 파일이 검사 범위 밖입니다.')
+    contents = {name: (directory / name).read_text(encoding='utf-8-sig') for name in files}
+    for hit in raw:
+        lines = contents[hit.file].splitlines()
+        if hit.line > len(lines):
+            raise ValueError('검사 근거 줄이 파일 범위 밖입니다.')
+        hit.evidence = masked_line(lines[hit.line - 1])
+        hit.identity = code_identity(contents[hit.file], hit.line, hit.file.endswith('.py'))
+    route_rows, settings = [], []
+    for name, content in contents.items():
+        raw.extend(secrets.detect(name, content))
+        found, summary = config.detect(name, content)
+        raw.extend(found); settings.extend(summary)
+        found, rows = routes.detect(name, content)
+        raw.extend(found); route_rows.extend(rows)
+        if name.endswith('.py'):
             try:
-                secret_lines = {n.lineno for n in sensitive_literals(ast.parse(content))
-                                if isinstance(n, ast.Constant) and len(n.value) >= 8}
+                ast.parse(content)
             except (SyntaxError, ValueError):
-                pass
-        for number, line in enumerate(content.splitlines(), 1):
-            if (name, number) in matched_lines:
-                excerpts[(name, number)] = masked_line(line)
-            if number in secret_lines or SECRET.search(line) or KEY.search(line):
-                indexed.setdefault((name, number, "literal-token"), []).append("static:secret")
-    findings = []
-    for number, ((name, line, rule), methods) in enumerate(sorted(indexed.items()), 1):
-        title, cwe, owasp, severity, impact, fix, diff = DETAILS[rule]
-        evidence = "[인증정보 값 가림]" if rule == "literal-token" else excerpts[(name, line)]
-        findings.append(Finding(f"F-{number:03}", title, cwe, owasp, severity, Confidence.POTENTIAL,
-                                Location(file=name, line=line), evidence, methods, impact, fix, diff))
-    return findings
+                partial.append(name)
+    for entry in getattr(files, 'sensitive_files', []):
+        raw.append(RawHit('secrets', 'vs-secret-file', entry['path'], 1, 'CWE-540', ['CI-05', 'V-01'],
+            '민감 파일이 Git HEAD에 포함됨', '실제 자격증명이면 교체하고 추적을 해제하세요. .gitignore 추가만으로 과거 커밋에서 삭제되지 않습니다.',
+            evidence='[파일 존재만 기록 · 내용 저장/전송 없음]', identity=entry['kind']))
+    settings.extend({'file': h.file, 'line': h.line, 'setting': h.rule_id, 'value': '확인 필요'}
+                    for h in raw if h.detector == 'semgrep' and h.rule_id in
+                    {'vs-js-cors', 'vs-js-cookie', 'vs-js-error'})
+    result = Inspection(normalize(raw), partial, route_rows, settings)
+    result.file_upload = any('request.files' in text or 'UploadFile' in text or 'multer' in text
+                             for text in contents.values())
+    return result

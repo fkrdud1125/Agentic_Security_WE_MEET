@@ -1,0 +1,62 @@
+{
+  "rules": [
+    {
+      "id": "vs-py-ssrf",
+      "languages": [
+        "python"
+      ],
+      "severity": "WARNING",
+      "message": "외부 입력 URL로 서버 요청",
+      "metadata": {
+        "cwe": "CWE-918",
+        "kisa": [
+          "CI-08"
+        ],
+        "vibescan": {
+          "title_ko": "외부 입력 URL로 서버 요청",
+          "remediation_ko": "허용한 호스트만 요청하고 리다이렉트와 내부 주소를 제한하세요.",
+          "severity": "High",
+          "confidence": "Likely"
+        }
+      },
+      "mode": "taint",
+      "pattern-sources": [
+        {
+          "pattern-either": [
+            {
+              "pattern": "flask.request.$ATTR"
+            },
+            {
+              "pattern": "flask.request.$ATTR[...]"
+            },
+            {
+              "pattern": "flask.request.$ATTR.get(...)"
+            }
+          ]
+        }
+      ],
+      "pattern-sinks": [
+        {
+          "patterns": [
+            {
+              "pattern-either": [
+                {
+                  "pattern": "requests.get($X, ...)"
+                },
+                {
+                  "pattern": "requests.post($X, ...)"
+                },
+                {
+                  "pattern": "httpx.get($X, ...)"
+                }
+              ]
+            },
+            {
+              "focus-metavariable": "$X"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

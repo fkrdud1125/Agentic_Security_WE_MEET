@@ -1,0 +1,38 @@
+{
+  "rules": [
+    {
+      "id": "concatenated-select",
+      "languages": [
+        "python"
+      ],
+      "severity": "WARNING",
+      "message": "문자열을 결합한 SQL 실행",
+      "metadata": {
+        "cwe": "CWE-89",
+        "kisa": [
+          "CI-02"
+        ],
+        "vibescan": {
+          "title_ko": "문자열을 결합한 SQL 실행",
+          "remediation_ko": "DB 드라이버의 매개변수 바인딩을 사용하세요.",
+          "severity": "High",
+          "confidence": "Potential"
+        }
+      },
+      "patterns": [
+        {
+          "pattern-inside": "$Q = $A + $B + $C\n..."
+        },
+        {
+          "pattern": "$DB.execute($Q)"
+        },
+        {
+          "metavariable-regex": {
+            "metavariable": "$A",
+            "regex": "(?i)^[\"']select\\s"
+          }
+        }
+      ]
+    }
+  ]
+}

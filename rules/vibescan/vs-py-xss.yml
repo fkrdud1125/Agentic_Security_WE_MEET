@@ -1,0 +1,71 @@
+{
+  "rules": [
+    {
+      "id": "vs-py-xss",
+      "languages": [
+        "python"
+      ],
+      "severity": "WARNING",
+      "message": "외부 입력의 HTML 이스케이프 생략",
+      "metadata": {
+        "cwe": "CWE-79",
+        "kisa": [
+          "CI-06"
+        ],
+        "vibescan": {
+          "title_ko": "외부 입력의 HTML 이스케이프 생략",
+          "remediation_ko": "자동 이스케이프를 유지하세요.",
+          "severity": "Medium",
+          "confidence": "Likely"
+        }
+      },
+      "mode": "taint",
+      "pattern-sources": [
+        {
+          "pattern-either": [
+            {
+              "pattern": "flask.request.$ATTR"
+            },
+            {
+              "pattern": "flask.request.$ATTR[...]"
+            },
+            {
+              "pattern": "flask.request.$ATTR.get(...)"
+            }
+          ]
+        }
+      ],
+      "pattern-sinks": [
+        {
+          "patterns": [
+            {
+              "pattern-either": [
+                {
+                  "pattern": "markupsafe.Markup($X)"
+                },
+                {
+                  "pattern": "django.utils.safestring.mark_safe($X)"
+                }
+              ]
+            },
+            {
+              "focus-metavariable": "$X"
+            }
+          ]
+        }
+      ],
+      "pattern-sanitizers": [
+        {
+          "pattern-either": [
+            {
+              "pattern": "markupsafe.escape(...)"
+            },
+            {
+              "pattern": "html.escape(...)"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

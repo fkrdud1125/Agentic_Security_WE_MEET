@@ -1,0 +1,75 @@
+{
+  "rules": [
+    {
+      "id": "vs-js-xss",
+      "languages": [
+        "javascript",
+        "typescript"
+      ],
+      "severity": "WARNING",
+      "message": "외부 입력의 HTML 응답",
+      "metadata": {
+        "cwe": "CWE-79",
+        "kisa": [
+          "CI-06"
+        ],
+        "vibescan": {
+          "title_ko": "외부 입력의 HTML 응답",
+          "remediation_ko": "textContent 또는 자동 이스케이프를 사용하세요.",
+          "severity": "Medium",
+          "confidence": "Likely"
+        }
+      },
+      "mode": "taint",
+      "pattern-sources": [
+        {
+          "pattern-either": [
+            {
+              "pattern": "$REQ.query.$X"
+            },
+            {
+              "pattern": "$REQ.body.$X"
+            },
+            {
+              "pattern": "$REQ.params.$X"
+            },
+            {
+              "pattern": "location.hash"
+            },
+            {
+              "pattern": "location.search"
+            }
+          ]
+        }
+      ],
+      "pattern-sinks": [
+        {
+          "patterns": [
+            {
+              "pattern-either": [
+                {
+                  "pattern": "$RES.send($X)"
+                },
+                {
+                  "pattern": "$EL.innerHTML = $X"
+                }
+              ]
+            },
+            {
+              "focus-metavariable": "$X"
+            }
+          ]
+        }
+      ],
+      "pattern-sanitizers": [
+        {
+          "pattern-either": [
+            {
+              "pattern": "DOMPurify.sanitize(...)"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "rules": [
+    {
+      "id": "vs-template-raw",
+      "languages": [
+        "generic"
+      ],
+      "severity": "WARNING",
+      "message": "템플릿 자동 이스케이프 해제",
+      "metadata": {
+        "cwe": "CWE-79",
+        "kisa": [
+          "CI-06"
+        ],
+        "vibescan": {
+          "title_ko": "템플릿 자동 이스케이프 해제",
+          "remediation_ko": "자동 이스케이프를 유지하세요.",
+          "severity": "Medium",
+          "confidence": "Potential"
+        }
+      },
+      "pattern-regex": "\\|\\s*safe\\b|\\{%\\s*autoescape\\s+false\\s*%\\}|v-html\\s*=|\\{@html\\s+",
+      "paths": {
+        "include": [
+          "*.html",
+          "*.vue",
+          "*.svelte",
+          "*.astro",
+          "*.jinja",
+          "*.j2"
+        ]
+      }
+    }
+  ]
+}

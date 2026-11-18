@@ -1,0 +1,34 @@
+{
+  "rules": [
+    {
+      "id": "vs-js-cors",
+      "languages": [
+        "javascript",
+        "typescript"
+      ],
+      "severity": "WARNING",
+      "message": "인증 응답의 과도한 CORS 허용",
+      "metadata": {
+        "cwe": "CWE-942",
+        "kisa": [
+          "V-02",
+          "CI-05"
+        ],
+        "vibescan": {
+          "title_ko": "인증 응답의 과도한 CORS 허용",
+          "remediation_ko": "신뢰한 Origin만 허용하세요.",
+          "severity": "Medium",
+          "confidence": "Potential"
+        }
+      },
+      "pattern-either": [
+        {
+          "pattern": "cors({..., origin: true, credentials: true, ...})"
+        },
+        {
+          "pattern": "cors({..., origin: \"*\", credentials: true, ...})"
+        }
+      ]
+    }
+  ]
+}

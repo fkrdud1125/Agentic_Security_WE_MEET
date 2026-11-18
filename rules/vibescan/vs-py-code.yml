@@ -1,0 +1,74 @@
+{
+  "rules": [
+    {
+      "id": "vs-py-code",
+      "languages": [
+        "python"
+      ],
+      "severity": "WARNING",
+      "message": "외부 입력의 코드·명령 실행",
+      "metadata": {
+        "cwe": "CWE-94",
+        "kisa": [
+          "CI-01"
+        ],
+        "vibescan": {
+          "title_ko": "외부 입력의 코드·명령 실행",
+          "remediation_ko": "입력을 실행하지 말고 고정된 연산과 인자 목록을 사용하세요.",
+          "severity": "High",
+          "confidence": "Likely"
+        }
+      },
+      "mode": "taint",
+      "pattern-sources": [
+        {
+          "pattern-either": [
+            {
+              "pattern": "flask.request.$ATTR"
+            },
+            {
+              "pattern": "flask.request.$ATTR[...]"
+            },
+            {
+              "pattern": "flask.request.$ATTR.get(...)"
+            }
+          ]
+        }
+      ],
+      "pattern-sinks": [
+        {
+          "patterns": [
+            {
+              "pattern-either": [
+                {
+                  "pattern": "eval($X, ...)"
+                },
+                {
+                  "pattern": "exec($X, ...)"
+                },
+                {
+                  "pattern": "os.system($X)"
+                },
+                {
+                  "pattern": "subprocess.run($X, ..., shell=True, ...)"
+                },
+                {
+                  "pattern": "subprocess.Popen($X, ..., shell=True, ...)"
+                },
+                {
+                  "pattern": "pickle.loads($X, ...)"
+                },
+                {
+                  "pattern": "flask.render_template_string($X, ...)"
+                }
+              ]
+            },
+            {
+              "focus-metavariable": "$X"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

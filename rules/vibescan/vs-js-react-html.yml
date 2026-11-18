@@ -1,0 +1,33 @@
+{
+  "rules": [
+    {
+      "id": "vs-js-react-html",
+      "languages": [
+        "javascript",
+        "typescript"
+      ],
+      "severity": "WARNING",
+      "message": "React 원시 HTML 삽입",
+      "metadata": {
+        "cwe": "CWE-79",
+        "kisa": [
+          "CI-06"
+        ],
+        "vibescan": {
+          "title_ko": "React 원시 HTML 삽입",
+          "remediation_ko": "원시 HTML을 피하거나 검증된 HTML 정화기를 사용하세요.",
+          "severity": "Medium",
+          "confidence": "Potential"
+        }
+      },
+      "patterns": [
+        {
+          "pattern": "<$TAG ... dangerouslySetInnerHTML={{__html: $X}} ... />"
+        },
+        {
+          "pattern-not": "<$TAG ... dangerouslySetInnerHTML={{__html: DOMPurify.sanitize(...)}} ... />"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "rules": [
+    {
+      "id": "vs-js-code",
+      "languages": [
+        "javascript",
+        "typescript"
+      ],
+      "severity": "WARNING",
+      "message": "외부 입력의 코드·명령 실행",
+      "metadata": {
+        "cwe": "CWE-94",
+        "kisa": [
+          "CI-01"
+        ],
+        "vibescan": {
+          "title_ko": "외부 입력의 코드·명령 실행",
+          "remediation_ko": "입력을 실행하지 말고 고정 명령과 인자 배열을 사용하세요.",
+          "severity": "High",
+          "confidence": "Likely"
+        }
+      },
+      "mode": "taint",
+      "pattern-sources": [
+        {
+          "pattern-either": [
+            {
+              "pattern": "$REQ.query.$X"
+            },
+            {
+              "pattern": "$REQ.body.$X"
+            },
+            {
+              "pattern": "$REQ.params.$X"
+            },
+            {
+              "pattern": "location.hash"
+            },
+            {
+              "pattern": "location.search"
+            }
+          ]
+        }
+      ],
+      "pattern-sinks": [
+        {
+          "patterns": [
+            {
+              "pattern-either": [
+                {
+                  "pattern": "eval($X)"
+                },
+                {
+                  "pattern": "child_process.exec($X, ...)"
+                },
+                {
+                  "pattern": "exec($X, ...)"
+                },
+                {
+                  "pattern": "new Function($X)"
+                }
+              ]
+            },
+            {
+              "focus-metavariable": "$X"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

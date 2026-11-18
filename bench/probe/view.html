@@ -1,0 +1,6 @@
+<!-- GT: P24 CI-06 vulnerable -->
+{{ value | safe }}
+<!-- GT: P25 CI-06 vulnerable -->
+{% autoescape false %}{{ value }}{% endautoescape %}
+<!-- GT: S22 CI-06 safe -->
+{{ value }}

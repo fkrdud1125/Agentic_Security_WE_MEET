@@ -1,0 +1,72 @@
+{
+  "rules": [
+    {
+      "id": "vs-js-sql",
+      "languages": [
+        "javascript",
+        "typescript"
+      ],
+      "severity": "WARNING",
+      "message": "외부 입력이 SQL에 도달",
+      "metadata": {
+        "cwe": "CWE-89",
+        "kisa": [
+          "CI-02"
+        ],
+        "vibescan": {
+          "title_ko": "외부 입력이 SQL에 도달",
+          "remediation_ko": "매개변수 바인딩을 사용하세요.",
+          "severity": "High",
+          "confidence": "Likely"
+        }
+      },
+      "mode": "taint",
+      "pattern-sources": [
+        {
+          "pattern-either": [
+            {
+              "pattern": "$REQ.query.$X"
+            },
+            {
+              "pattern": "$REQ.body.$X"
+            },
+            {
+              "pattern": "$REQ.params.$X"
+            },
+            {
+              "pattern": "location.hash"
+            },
+            {
+              "pattern": "location.search"
+            }
+          ]
+        }
+      ],
+      "pattern-sinks": [
+        {
+          "patterns": [
+            {
+              "pattern-either": [
+                {
+                  "pattern": "$DB.query($X, ...)"
+                },
+                {
+                  "pattern": "$DB.execute($X, ...)"
+                },
+                {
+                  "pattern": "$DB.raw($X, ...)"
+                },
+                {
+                  "pattern": "$DB.$queryRawUnsafe($X, ...)"
+                }
+              ]
+            },
+            {
+              "focus-metavariable": "$X"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "rules": [
+    {
+      "id": "vs-py-yaml",
+      "languages": [
+        "python"
+      ],
+      "severity": "WARNING",
+      "message": "안전하지 않은 YAML 역직렬화",
+      "metadata": {
+        "cwe": "CWE-502",
+        "kisa": [
+          "CI-01"
+        ],
+        "vibescan": {
+          "title_ko": "안전하지 않은 YAML 역직렬화",
+          "remediation_ko": "yaml.safe_load를 사용하세요.",
+          "severity": "High",
+          "confidence": "Potential"
+        }
+      },
+      "pattern-either": [
+        {
+          "pattern": "yaml.load($X, Loader=yaml.Loader)"
+        },
+        {
+          "pattern": "yaml.load($X, Loader=yaml.UnsafeLoader)"
+        }
+      ]
+    }
+  ]
+}

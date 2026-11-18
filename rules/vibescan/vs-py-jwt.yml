@@ -1,0 +1,32 @@
+{
+  "rules": [
+    {
+      "id": "vs-py-jwt",
+      "languages": [
+        "python"
+      ],
+      "severity": "WARNING",
+      "message": "JWT 서명 검증 비활성화",
+      "metadata": {
+        "cwe": "CWE-347",
+        "kisa": [
+          "CI-16"
+        ],
+        "vibescan": {
+          "title_ko": "JWT 서명 검증 비활성화",
+          "remediation_ko": "고정 알고리즘·키로 서명·만료·발급자·대상을 검증하세요.",
+          "severity": "High",
+          "confidence": "Potential"
+        }
+      },
+      "pattern-either": [
+        {
+          "pattern": "jwt.decode(..., options={..., \"verify_signature\": False, ...}, ...)"
+        },
+        {
+          "pattern": "jwt.decode(..., algorithms=[\"none\"], ...)"
+        }
+      ]
+    }
+  ]
+}

@@ -49,6 +49,10 @@ function sortedFindings() {
 function showDetail(f) {
   $("detail-badge").replaceChildren(badge(f.severity));
   $("detail-title").textContent = f.title;
+  $("detail-kisa").textContent = (f.kisa || []).map(code => {
+    const item = (result.kisa_checklist || []).find(r => r.code === code);
+    return `${code}: ${item?.criteria || "분류 기준 미기록"}`;
+  }).join(" · ");
   $("detail-meta").textContent = `${locationText(f)} · ${f.cwe} · ${f.owasp} · ${f.confidence} · ${statuses[findingStatus(f)]} · 최초 심각도 ${f.original_severity || f.severity}`;
   $("evidence").textContent = f.evidence || "근거 없음";
   $("how-found").textContent = f.how_found.join(" · ");
@@ -76,6 +80,7 @@ function filterFindings() {
   const severity = $("severity-filter").value, status = $("status-filter").value;
   const search = $("search").value.toLocaleLowerCase();
   const findings = sortedFindings().filter(f => (!severity || f.severity === severity) && (!status || findingStatus(f) === status) &&
+    (!$("kisa-filter").value || (f.kisa || []).includes($("kisa-filter").value)) &&
     `${f.title} ${f.location.file || ""} ${f.cwe} ${f.owasp}`.toLocaleLowerCase().includes(search));
   $("findings").replaceChildren();
   $("filtered-count").textContent = `${findings.length}건`;
@@ -83,7 +88,7 @@ function filterFindings() {
   for (const f of findings) {
     const row = node("tr", ""), severityCell = node("td", ""), name = node("td", "");
     severityCell.append(badge(f.severity));
-    name.append(findingButton(f), node("p", locationText(f), "muted"));
+    name.append(findingButton(f), node("p", locationText(f), "muted"), node("small", (f.kisa || []).join(" · ")));
     row.append(severityCell, name, node("td", statuses[findingStatus(f)] || f.status), node("td", f.confidence), node("td", changes[f.change] || "비교 전"));
     $("findings").append(row);
   }
@@ -109,10 +114,11 @@ function render() {
   $("analysis-note").textContent = d.analysis_note || "모델 분석 기록 없음";
   $("profile").textContent = `${d.profile.framework || "프레임워크 미확인"} · 라우트 ${d.profile.routes}개 · ${d.profile.auth || "인증 방식 미확인"}`;
   $("coverage").replaceChildren();
-  const execution = {completed: "정적 검사 완료", unsupported: "지원 소스 없음 · 미검사", manual: "수동 확인 필요 · 미검사"};
+  const execution = {completed: "자동 점검 범위 검사 완료", unsupported: "지원 소스 없음 · 미검사", manual: "수동 확인 필요 · 미검사", partial: "부분 점검 · 수동 확인 포함"};
   for (const check of d.coverage) $("coverage").append(node("li", `${check.name} — ${execution[check.execution] || "검사 여부 미확인"}. ${check.reason || ""}`));
   if (!d.coverage.length) $("coverage").append(node("li", "이 결과에는 검사 범위 기록이 없습니다."));
   $("limitations").replaceChildren(...d.profile.limitations.map(text => node("li", text)));
+  renderChecklist(d);
   $("priorities").replaceChildren();
   const priorities = sortedFindings().filter(f => findingStatus(f) === "open").slice(0, 3);
   for (const f of priorities) {
@@ -123,6 +129,35 @@ function render() {
   if (!priorities.length) $("priorities").append(node("p", "열린 발견이 없습니다. 미검사 항목과 오탐 후보도 확인하세요.", "muted"));
   filterFindings();
   $("result").hidden = false;
+}
+function renderChecklist(d) {
+  const selected = $("kisa-filter").value;
+  const all = node("option", "전체 분류"); all.value = "";
+  $("kisa-filter").replaceChildren(all);
+  $("kisa-checklist").replaceChildren();
+  for (const check of d.kisa_checklist || []) {
+    const option = node("option", `${check.code} ${check.name}`); option.value = check.code;
+    $("kisa-filter").append(option);
+    const button = node("button", "", "kisa-item" + (check.status === "취약 후보" ? " candidate" : ""));
+    button.type = "button";
+    button.append(node("strong", `${check.code} · ${check.name}`), node("span", `${check.status} · ${check.findings.length}건`), node("small", check.note));
+    button.addEventListener("click", () => {
+      $("kisa-filter").value = check.code;
+      $("severity-filter").value = ""; $("status-filter").value = "open"; $("search").value = "";
+      filterFindings(); $("kisa-filter").focus();
+    });
+    $("kisa-checklist").append(button);
+  }
+  if (!(d.kisa_checklist || []).length) $("kisa-checklist").append(node("p", "구버전 결과 · CI 분류 검사 여부 미확인"));
+  $("kisa-filter").value = (d.kisa_checklist || []).some(c => c.code === selected) ? selected : "";
+  $("engine-note").textContent = `${d.engine?.rulepack || "규칙팩 미기록"} · 부분 실패 파일: ${(d.partial_files || []).join(", ") || "기록 없음"}`;
+  $("route-map").replaceChildren();
+  for (const r of d.routes || []) {
+    const tr = node("tr", "");
+    tr.append(node("td", `${r.method} ${r.path}`), node("td", `${r.file}:${r.line}`), node("td", r.auth_guard || "미확인"), node("td", r.ownership_check ? "참조 있음" : "미확인"));
+    $("route-map").append(tr);
+  }
+  $("config-summary").replaceChildren(...(d.config_summary || []).map(c => node("li", `${c.file}:${c.line} · ${c.setting}: ${c.value}`)));
 }
 async function selectScan() {
   const version = ++detailVersion;
@@ -283,7 +318,7 @@ $("scan").addEventListener("click", async () => {
 });
 $("refresh").addEventListener("click", () => refresh());
 $("scan-select").addEventListener("change", selectScan);
-for (const id of ["severity-filter", "status-filter"]) $(id).addEventListener("change", filterFindings);
+for (const id of ["severity-filter", "status-filter", "kisa-filter"]) $(id).addEventListener("change", filterFindings);
 $("search").addEventListener("input", filterFindings);
 $("close-detail").addEventListener("click", () => $("detail").close());
 $("download").addEventListener("click", () => {

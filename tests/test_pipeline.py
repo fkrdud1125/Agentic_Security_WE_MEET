@@ -25,7 +25,7 @@ class PipelineTests(unittest.TestCase):
         (self.repo / ".gitignore").write_text("exclude.py\n")
         (self.repo / "exclude.py").write_text("SENSITIVE")
         (self.repo / "binary.py").write_bytes(b"a\0b")
-        (self.repo / ".vibescanignore").write_text("ignore.py\n")
+        (self.repo / ".vibescanignore").write_text("ignore.py\n.env.local\n")
         (self.repo / "ignore.py").write_text("SENSITIVE")
         (self.repo / "nested").mkdir()
         (self.repo / "nested" / "hide.py").write_text("SENSITIVE")
@@ -166,7 +166,8 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(ask.call_count, 1)
         data = json.loads((folder / "scan_result.json").read_text(encoding="utf-8"))
         self.assertEqual(data["findings"], [])
-        self.assertEqual({c["id"] for c in data["coverage"] if c["execution"] == "unsupported"}, {"sql", "xss"})
+        self.assertEqual({c["id"] for c in data["coverage"] if c["execution"] == "completed"}, {"secrets", "sql", "xss"})
+        self.assertEqual(next(c for c in data['kisa_checklist'] if c['code']=='V-03')['status'], '수동 확인 필요')
 
     def test_invalid_plan_still_runs_local_checks_and_review(self):
         reply = review_answer([{"id": "F-001", "severity": "High"}])

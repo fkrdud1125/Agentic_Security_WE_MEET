@@ -1,0 +1,26 @@
+{
+  "rules": [
+    {
+      "id": "vs-js-jwt",
+      "languages": [
+        "javascript",
+        "typescript"
+      ],
+      "severity": "WARNING",
+      "message": "검증 없는 JWT 해석",
+      "metadata": {
+        "cwe": "CWE-347",
+        "kisa": [
+          "CI-16"
+        ],
+        "vibescan": {
+          "title_ko": "검증 없는 JWT 해석",
+          "remediation_ko": "서버 인가 전 jwt.verify로 서명과 클레임을 검증하세요.",
+          "severity": "High",
+          "confidence": "Potential"
+        }
+      },
+      "pattern": "jwt.decode(...)"
+    }
+  ]
+}

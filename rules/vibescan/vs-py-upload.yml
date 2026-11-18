@@ -1,0 +1,35 @@
+{
+  "rules": [
+    {
+      "id": "vs-py-upload",
+      "languages": [
+        "python"
+      ],
+      "severity": "WARNING",
+      "message": "검증하지 않은 업로드 파일명",
+      "metadata": {
+        "cwe": "CWE-434",
+        "kisa": [
+          "CI-14"
+        ],
+        "vibescan": {
+          "title_ko": "검증하지 않은 업로드 파일명",
+          "remediation_ko": "파일명·확장자·크기를 검증하고 실행 불가능한 위치에 저장하세요.",
+          "severity": "High",
+          "confidence": "Potential"
+        }
+      },
+      "patterns": [
+        {
+          "pattern-inside": "$F = flask.request.files[...]\n..."
+        },
+        {
+          "pattern": "$F.save(<... $F.filename ...>, ...)"
+        },
+        {
+          "pattern-not": "$F.save(<... werkzeug.utils.secure_filename(...) ...>, ...)"
+        }
+      ]
+    }
+  ]
+}

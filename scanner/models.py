@@ -70,6 +70,13 @@ class Finding:
     original_severity: Severity | None = None
     triage_reason: str = ""
     fix_note: str = "로컬 참고 예시 · 실제 코드 문맥에서 검토 필요"
+    rule_id: str = ""
+    fingerprint: str = ""
+    kisa: list[str] = field(default_factory=list)
+    category: str = ""
+    detector: str = ""
+    trace: list[dict] = field(default_factory=list)
+    kisa_reason: str = ""
 
 
 @dataclass
@@ -108,6 +115,13 @@ class ScanResult:
     checklist: list[str] = field(default_factory=list)
     analysis_note: str = ""
     coverage: list[dict] = field(default_factory=list)
+    engine: dict = field(default_factory=dict)
+    languages: dict = field(default_factory=dict)
+    partial_files: list[str] = field(default_factory=list)
+    sensitive_files: list[dict] = field(default_factory=list)
+    routes: list[dict] = field(default_factory=list)
+    config_summary: list[dict] = field(default_factory=list)
+    kisa_checklist: list[dict] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, raw: str):
@@ -136,6 +150,8 @@ class ScanResult:
             trigger=Trigger(data.get("trigger", "manual")),
             checklist=data.get("checklist", []), analysis_note=data.get("analysis_note", ""),
             coverage=data.get("coverage", []),
+            **{key: data[key] for key in ("engine", "languages", "partial_files", "sensitive_files",
+                                        "routes", "config_summary", "kisa_checklist") if key in data},
         )
 
     def to_dict(self) -> dict:

@@ -7,14 +7,14 @@ import re
 import tokenize
 from pathlib import Path
 
-from .static import KEY, SECRET, sensitive_literals
+from .detectors.secrets import KEY, SECRET, sensitive_literals, hidden_values
 
 REDACTED = "[REDACTED]"
 
 
 def sanitize(source, known=()):
     """Remove comments, docstrings and credential literals, retaining source line numbers."""
-    hidden = set(known) | set(KEY.findall(source))
+    hidden = set(known) | hidden_values(source)
     hidden.update(m.group(1) for m in SECRET.finditer(source))
     edits = []
     lines = source.splitlines(keepends=True)
@@ -38,8 +38,7 @@ def sanitize(source, known=()):
             docs.add(id(node.value))
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             value = node.value
-            if (id(node) in sensitive or KEY.search(value)
-                    or re.search(r"\w+://[^\s/]+:[^\s@]+@|-----BEGIN .*PRIVATE KEY", value)):
+            if id(node) in sensitive or KEY.search(value):
                 hidden.add(value)
     for node in ast.walk(tree):
         if not isinstance(node, (ast.Constant, ast.JoinedStr)):
@@ -86,6 +85,7 @@ class Context:
                                 "depth": len(Path(name).parts) - 1})
         originals = {}
         for name in files:
+            self.hidden.update(hidden_values((directory / name).read_text(encoding="utf-8-sig")))
             if not name.endswith(".py"):
                 continue
             originals[name] = (directory / name).read_text(encoding="utf-8-sig")

@@ -1,6 +1,7 @@
 """커밋별 스캔과 발견 메타데이터를 로컬 SQLite 파일에 보관한다."""
 
 import sqlite3
+import json
 from contextlib import closing
 from datetime import timezone
 from pathlib import Path
@@ -46,6 +47,10 @@ def save_scan(database: Path, result: ScanResult) -> None:
     with closing(sqlite3.connect(database)) as db:
         db.execute("PRAGMA foreign_keys = ON")
         db.executescript(SCHEMA)
+        columns = {row[1] for row in db.execute("PRAGMA table_info(findings)")}
+        for column in ("fingerprint", "rule_id", "kisa"):
+            if column not in columns:
+                db.execute(f"ALTER TABLE findings ADD COLUMN {column} TEXT")
         with db:
             db.execute("""
                 INSERT INTO scans (scan_id, repo_name, repo_path, branch, commit_sha,
@@ -58,10 +63,11 @@ def save_scan(database: Path, result: ScanResult) -> None:
                   result.risk_score, data["delta"]["new"], data["delta"]["fixed"]))
             db.executemany("""
                 INSERT INTO findings (scan_id, finding_id, severity, confidence, status,
-                    change, introduced_in, cwe, file, line)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    change, introduced_in, cwe, file, line, fingerprint, rule_id, kisa)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, ((result.scan_id, f.id, f.severity, f.confidence, f.status,
-                   f.change, f.introduced_in, f.cwe, f.location.file, f.location.line)
+                   f.change, f.introduced_in, f.cwe, f.location.file, f.location.line,
+                   f.fingerprint, f.rule_id, json.dumps(f.kisa))
                   for f in result.findings))
 
 
