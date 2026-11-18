@@ -11,7 +11,6 @@ class Element {
   addEventListener(type, callback) { this.handlers[type] = callback; }
   setAttribute() {}
   showModal() { this.open = true; }
-  focus() { this.focused = true; }
   classList = {toggle() {}};
 }
 const elements = new Map();
@@ -45,24 +44,6 @@ vm.runInContext('filterFindings()', context);
 assert.equal(get('findings').children.length, 1);
 assert.equal(get('findings').children[0].children[2].textContent, '오탐 후보');
 console.log('Dashboard resolved-status regression: OK');
-
-vm.runInContext(`
-result.findings[1].kisa = ['CI-02'];
-result.findings[1].how_found = [];
-result.kisa_checklist = [{code:'CI-02', name:'SQL', status:'취약 후보', findings:['F-002'],
-  criteria:'입력 바인딩 확인', note:'<img src=x onerror=alert(1)>'}];
-renderChecklist(result);
-`, context);
-get('kisa-checklist').children[0].handlers.click();
-assert.equal(get('kisa-filter').value, 'CI-02');
-assert.equal(get('findings').children.length, 1);
-assert.equal(get('kisa-checklist').children[0].children[2].textContent, '<img src=x onerror=alert(1)>');
-vm.runInContext('showDetail(result.findings[1]);', context);
-assert.match(get('detail-kisa').textContent, /CI-02: 입력 바인딩 확인/);
-vm.runInContext('renderChecklist({});', context);
-assert.equal(get('kisa-filter').value, '');
-assert.match(get('kisa-checklist').children[0].textContent, /구버전/);
-console.log('Dashboard CI filter, text-only rendering, legacy fallback: OK');
 
 async function scanFlow() {
   get('repo-select').value = 'C:/repo';

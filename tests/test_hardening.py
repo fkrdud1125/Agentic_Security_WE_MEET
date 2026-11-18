@@ -119,6 +119,10 @@ class HardeningTests(unittest.TestCase):
         result = ScanResult.from_json(raw)
         self.assertIn('V-01', result.findings[0].kisa)
         self.assertEqual(len(result.kisa_checklist), 25)
+        # The KISA mapping is internal: users see neither CI/V codes nor the route/config tables.
+        shown = result.report_md + ''.join(c['reason'] for c in result.coverage)
+        for hidden in ('KISA', 'CI-', 'V-01', '엔드포인트 지도', '설정 요약'):
+            self.assertNotIn(hidden, shown)
         database = self.root / 'state/scan-history.sqlite3'
         self.assertNotIn(b'private-never-export', database.read_bytes())
         # Existing DB schema migrates without dropping historical scans or finding rows.

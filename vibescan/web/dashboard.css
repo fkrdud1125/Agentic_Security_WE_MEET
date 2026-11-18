@@ -139,9 +139,3 @@ footer span{max-width:160px;text-align:right}
 td{min-width:85px}
 td:nth-child(2){min-width:220px}
 }
-/* Checklist controls remain usable on narrow screens. */
-.kisa-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:10px; }
-.kisa-item { display:flex; flex-direction:column; gap:8px; text-align:left; white-space:normal; height:100%; }
-.kisa-item small { font-weight:400; color:#586777; }
-.kisa-item.candidate { border-color:#dc8989; background:#fff6f6; }
-summary { cursor:pointer; font-weight:700; }

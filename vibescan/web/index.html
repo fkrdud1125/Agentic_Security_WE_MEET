@@ -51,22 +51,12 @@
       </section>
       <section class="panel coverage"><h2>이번 진단이 확인한 범위</h2><p id="analysis-note"></p><p id="profile" class="muted"></p>
         <ul id="coverage"></ul><ul id="limitations" class="muted"></ul></section>
-      <section class="panel" aria-labelledby="kisa-title"><h2 id="kisa-title">KISA 매핑 점검표</h2>
-        <p class="notice">CI 분류는 계획서 기반 초안이며 원문 대조 미완료입니다. 자동 정적 검사 결과로, KISA 공식 평가나 안전 판정이 아닙니다.</p>
-        <p id="engine-note" class="muted"></p><div id="kisa-checklist" class="kisa-grid"></div>
-      </section>
-      <section class="panel"><details><summary>엔드포인트 지도 · 설정 요약</summary>
-        <p class="muted">인증·소유자 단서는 적용을 보장하지 않습니다. 상위 미들웨어와 실제 권한 정책을 확인하세요.</p>
-        <div class="table-scroll"><table><thead><tr><th>메서드 / 경로</th><th>위치</th><th>인증 단서</th><th>소유자 단서</th></tr></thead><tbody id="route-map"></tbody></table></div>
-        <ul id="config-summary"></ul>
-      </details></section>
       <section class="panel"><div class="section-heading"><h2>먼저 확인하세요</h2><span class="muted">열린 발견 중 우선순위 3건</span></div><div id="priorities"></div></section>
       <section class="panel findings-panel">
         <div class="section-heading"><h2>발견 목록 <span id="filtered-count" class="muted"></span></h2></div>
         <div class="filters">
           <label>심각도<select id="severity-filter"><option value="">전체 심각도</option><option>Critical</option><option>High</option><option>Medium</option><option>Low</option><option>Info</option></select></label>
           <label>상태<select id="status-filter"><option value="open">열림</option><option value="">전체 상태</option><option value="dismissed">오탐 후보</option><option value="fixed">수정됨</option></select></label>
-          <label>CI / V 코드<select id="kisa-filter"><option value="">전체 분류</option></select></label>
           <label class="search">파일·제목·유형<input id="search" type="search" placeholder="파일명, SQL, CWE-89…"></label>
         </div>
         <div class="table-scroll"><table><thead><tr><th>심각도</th><th>발견 / 위치</th><th>상태</th><th>신뢰도</th><th>변화</th></tr></thead><tbody id="findings"></tbody></table></div>
@@ -78,7 +68,6 @@
   <dialog id="detail" aria-labelledby="detail-title">
     <div class="section-heading"><span id="detail-badge"></span><button id="close-detail" type="button" aria-label="발견 상세 닫기">닫기 ×</button></div>
     <h2 id="detail-title"></h2><p id="detail-meta" class="muted"></p>
-    <p id="detail-kisa" class="notice"></p>
     <h3>발견 근거</h3><pre id="evidence"></pre><p id="how-found" class="muted"></p>
     <h3>영향</h3><p id="impact"></p><h3>판정 근거</h3><p id="triage"></p>
     <h3>수정 방법</h3><p id="remediation"></p>

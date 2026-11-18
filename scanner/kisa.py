@@ -57,5 +57,4 @@ def legacy_coverage(checks, rows):
         related = [r for r in rows if r['code'] in mapping[check['id']]]
         check['execution'] = ('partial' if any(r['status'] in ('부분 점검', '동적 점검 필요', '수동 확인 필요') for r in related)
                               else 'completed')
-        check['reason'] = ' · '.join(f"{r['code']}: {r['status']}" for r in related)
     return checks

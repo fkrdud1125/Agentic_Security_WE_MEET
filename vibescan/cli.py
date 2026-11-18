@@ -44,16 +44,12 @@ def render(result):
         mode = {"completed": "정적 검사 완료", "unsupported": "지원 Python 소스 없음 · 미검사",
                 "manual": "수동 확인 필요 · 미검사", "partial": "부분 점검 · 수동 확인 포함"}[check["execution"]]
         rows.append(f"- {check['name']} [{mode}]: {check['reason']}")
-    rows.extend(["", "## KISA 매핑 점검표 (원문 대조 미완료)",
-                 "자동 정적 점검 결과이며 KISA 공식 평가가 아닙니다. CI 분류·판단기준은 계획서 기반 초안입니다.",
-                 "", "| 코드 | 항목 | 결과 | 발견 수 |", "|---|---|---|---|"])
-    rows.extend(f"| {r['code']} | {r['name']} | {r['status']} | {len(r['findings'])} |" for r in result.kisa_checklist)
     rows.extend(["", "## 발견 및 수정 방법"])
     for f in sorted(opened, key=lambda item: list(Severity).index(item.severity)):
         rows.extend(["", f"### {f.id} · {f.severity} · {f.title}", "",
                      f"- 위치: `{f.location.file}:{f.location.line}`",
                      f"- 근거: `{f.evidence}` ({', '.join(f.how_found)})",
-                     f"- 분류: {f.cwe} · {f.owasp} · {f.confidence} · {', '.join(f.kisa)}",
+                     f"- 분류: {f.cwe} · {f.owasp} · {f.confidence}",
                      f"- 판정 근거: {f.triage_reason or '로컬 규칙 탐지 · 모델 검토 없음'}",
                      f"- 최초 규칙 심각도: {f.original_severity or f.severity}",
                      f"- 영향: {f.impact_ko}", f"- 수정 방법: {f.remediation_ko}",
@@ -69,15 +65,10 @@ def render(result):
                          f"  최초 심각도: {f.original_severity} · 근거: {f.triage_reason}"])
     rows.extend(["", "## 추가 확인", *["- " + s for s in MANUAL],
                  "- 외부 입력 도달 여부와 제시한 수정 예시는 실제 호출 문맥에서 검토하세요."])
-    rows.extend(["", "## 엔드포인트 지도", "인증·소유자 조건은 정적 단서이며 적용 여부의 확정이 아닙니다."])
-    rows.extend(f"- {r['method']} `{r['path']}` · {r['file']}:{r['line']} · 인증: {r['auth_guard'] or '미확인'} · 소유자 단서: {r['ownership_check']}" for r in result.routes)
-    rows.extend(["", "## 설정 요약"])
-    rows.extend(f"- {r['file']}:{r['line']} · {r['setting']}: {r['value']}" for r in result.config_summary)
     rows.extend(["", "## 점검 한계", *['- ' + x for x in result.profile.limitations],
                  '- 부분 실패 파일: ' + (', '.join(result.partial_files) or '없음'),
                  '- 규칙팩: ' + result.engine.get('rulepack', '미기록'),
-                 '- 점수: 열린 발견의 Critical 40 / High 20 / Medium 10 / Low 3 합계, 최대 100 (기존 방식).',
-                 '- 분류 참고: https://www.kisa.or.kr/2060204/form?postSeq=22 (CI 원문 대조 미완료)'])
+                 '- 점수: 열린 발견의 Critical 40 / High 20 / Medium 10 / Low 3 합계, 최대 100 (기존 방식).'])
     return "\n".join(rows) + "\n"
 
 
@@ -140,7 +131,6 @@ def scan(repo, output, directory, offline=False):
     kisa_rows = checklist(findings, languages(files), partial)
     coverage = legacy_coverage(coverage, kisa_rows)
     app.routes = len(getattr(findings, 'routes', [])) or app.routes
-    app.limitations += ["CI 항목은 계획서 기반 매핑 초안이며 KISA 원문 대조 미완료입니다."]
     result = ScanResult(scan_id, repo.name, datetime.now(timezone.utc), Target(str(repo)),
                         min(100, sum(weights[f.severity] for f in findings if f.status == Status.OPEN)), app, list(findings), "",
                         branch=branch, commit=commit, checklist=[c['name'] for c in coverage],
