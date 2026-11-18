@@ -289,6 +289,22 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("복제하지 못했습니다", response.json()["detail"])
             self.assertFalse((self.directory / "github/owner/missing").exists())
 
+            # An empty repository and a leftover interrupted clone must not block a later connection.
+            empty = remote / "owner" / "empty"
+            subprocess.run(["git", "init", "-q", "-b", "main", str(empty)], check=True)
+            response = self.client.post("/api/repos", headers=self.headers, json={"path": "https://github.com/owner/empty"})
+            self.assertEqual(response.status_code, 422)
+            self.assertIn("빈 저장소", response.json()["detail"])
+            self.assertFalse((self.directory / "github/owner/empty").exists())
+            leftover = self.directory / "github/.partial/owner/empty"
+            leftover.mkdir(parents=True)
+            (leftover / "half-written").write_text("x")
+            (empty / "app.py").write_text("print(1)\n")
+            self.commit(empty)
+            response = self.client.post("/api/repos", headers=self.headers, json={"path": "https://github.com/owner/empty"})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertFalse(leftover.exists())
+
             response = self.client.post("/api/repos", headers=self.headers, json={"path": "https://github.com/owner/demo"})
             self.assertEqual(response.status_code, 200, response.text)
             clone = self.directory.resolve() / "github" / "owner" / "demo"

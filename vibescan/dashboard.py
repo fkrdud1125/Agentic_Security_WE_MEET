@@ -106,20 +106,29 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
             raise HTTPException(422, "GitHub 주소는 https://github.com/소유자/저장소 형식이어야 합니다.")
         dest = clones / match[1] / match[2]
         if dest.exists():
-            return dest  # already cloned: reconnect, rescans fetch the latest commit
+            return dest  # only complete clones are moved here; rescans fetch the latest commit
         if not cloning.acquire(blocking=False):
             raise HTTPException(409, "다른 저장소를 복제하는 중입니다. 완료 후 다시 시도하세요.")
+        # Clone beside the target (owners cannot start with "."), so an interrupted clone never looks finished.
+        staging = clones / ".partial" / match[1] / match[2]
         try:
+            if staging.exists():
+                shutil.rmtree(staging)
+            staging.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            run_git("clone", "--depth", "1", "--no-tags", "--", url, str(staging))
+            try:
+                run_git("rev-parse", "--verify", "--quiet", "HEAD^{commit}", cwd=staging)
+            except subprocess.CalledProcessError:
+                raise HTTPException(422, "커밋이 없는 빈 저장소입니다. 첫 커밋을 push한 뒤 다시 연결하세요.") from None
             dest.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            run_git("clone", "--depth", "1", "--no-tags", "--", url, str(dest))
+            staging.rename(dest)
         except subprocess.TimeoutExpired:
-            shutil.rmtree(dest, ignore_errors=True)
             raise HTTPException(504, "복제 시간(5분)이 초과되었습니다. 저장소 크기와 네트워크를 확인하세요.") from None
         except (subprocess.CalledProcessError, OSError):
-            shutil.rmtree(dest, ignore_errors=True)
             raise HTTPException(422, "GitHub 저장소를 복제하지 못했습니다. 주소와 네트워크를 확인하세요. "
                                      "비공개 저장소는 이 PC의 Git 인증(SSH 키·자격 증명)이 필요합니다.") from None
         finally:
+            shutil.rmtree(staging, ignore_errors=True)
             cloning.release()
         return dest
 
