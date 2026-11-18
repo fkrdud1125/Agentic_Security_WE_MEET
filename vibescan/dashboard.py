@@ -1,6 +1,7 @@
 """Loopback dashboard for saved results and explicit local repository scans."""
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -62,6 +63,7 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
     directory = (directory or data_dir()).expanduser().resolve()
     database = directory / "scan-history.sqlite3"
     clones = directory / "github"
+    folders = directory / "folders"
     lock = threading.Lock()
     cloning = threading.Lock()
     job = {"state": "idle"}
@@ -101,8 +103,8 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
         return hook.connected(database)
 
     def hook_state(path):
-        if Path(path).is_relative_to(clones):
-            return None  # VibeScan's own clones get no local commits, so a hook would never fire
+        if Path(path).is_relative_to(clones) or Path(path).is_relative_to(folders):
+            return None  # VibeScan's own clones and folder snapshots get no commits, so a hook would never fire
         try:
             return hook.installed(Path(path))
         except (ValueError, OSError, subprocess.TimeoutExpired):
@@ -175,10 +177,54 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
             cloning.release()
         return dest
 
+    def snapshot_folder(dest, source=None):
+        """Record a plain folder's current files as a commit in VibeScan's own Git directory.
+
+        The folder itself is only read: Git keeps the index and objects under dest, never in the source.
+        """
+        if source is None:
+            # Git stores the path as UTF-8; reading it in the Windows locale breaks paths like "바탕 화면".
+            source = git(dest, "config", "vibescan.source").decode("utf-8").strip()
+        else:
+            run_git("init", "-q", str(dest))
+            run_git("config", "vibescan.source", str(source), cwd=dest)
+        if not Path(source).is_dir():
+            raise FileNotFoundError(source)
+        tree = ["--git-dir", str(dest / ".git"), "--work-tree", str(source)]
+        run_git(*tree, "add", "-A", cwd=source)
+        # --allow-empty: a rescan of an unchanged folder still records which snapshot was scanned.
+        run_git(*tree, "-c", "user.name=VibeScan", "-c", "user.email=vibescan@localhost", "-c", "commit.gpgsign=false",
+                "commit", "-q", "--allow-empty", "-m", "VibeScan folder snapshot", cwd=source)
+
+    def plain_folder(raw):
+        """A folder outside any Git repository gets a VibeScan-managed snapshot; anything else is returned as is."""
+        try:
+            path = Path(raw).expanduser().resolve()
+            if not path.is_dir():
+                return raw
+            git(path, "rev-parse", "--is-inside-work-tree")
+            return raw
+        except ValueError:  # not inside a Git work tree
+            pass
+        except OSError:
+            return raw
+        if root.is_relative_to(path) or directory.is_relative_to(path):
+            raise HTTPException(422, "결과·설정 폴더가 이 폴더 안에 있습니다. 프로젝트 폴더만 지정하세요.")
+        dest = folders / f"{path.name}-{hashlib.sha256(str(path).encode()).hexdigest()[:8]}"
+        if (dest / ".git").is_dir():
+            return dest  # already connected; rescans take a fresh snapshot
+        try:
+            folders.mkdir(mode=0o700, parents=True, exist_ok=True)
+            snapshot_folder(dest, path)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+            shutil.rmtree(dest, ignore_errors=True)
+            raise HTTPException(422, "폴더의 파일을 읽어 스냅샷을 만들지 못했습니다. 폴더 접근 권한을 확인하세요.") from None
+        return dest
+
     @app.post("/api/repos")
     def connect_repo(body: RepoInput):
         raw = body.path.strip()
-        repo = repository(clone(raw) if raw.startswith(("https://", "http://", "git@")) else raw)
+        repo = repository(clone(raw) if raw.startswith(("https://", "http://", "git@")) else plain_folder(raw))
         try:
             directory.mkdir(mode=0o700, parents=True, exist_ok=True)
             with closing(sqlite3.connect(database)) as db, db:
@@ -199,6 +245,15 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
             with lock:
                 job = {"state": "failed", "repo": repo, "message": "GitHub에서 최신 커밋을 가져오지 못했습니다. "
                        "네트워크와 저장소 접근 권한을 확인하세요. 기존 결과는 유지됩니다."}
+            return
+        try:
+            if Path(repo).is_relative_to(folders):
+                snapshot_folder(Path(repo))
+        except Exception:
+            # Anything escaping here would kill the thread and leave the job "running" forever.
+            with lock:
+                job = {"state": "failed", "repo": repo, "message": "원본 폴더를 읽지 못했습니다. 폴더가 옮겨졌거나 "
+                       "삭제되지 않았는지 확인하세요. 기존 결과는 유지됩니다."}
             return
         def report(stage, text):
             with lock:

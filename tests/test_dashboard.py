@@ -157,7 +157,7 @@ class DashboardTests(unittest.TestCase):
         self.assertFalse(self.directory.exists())
         repo = self.repository()
         (repo / "child").mkdir()
-        for path, reason in ((self.root.parent, "Git 저장소가 아니"), (repo / "child", "하위 폴더"),
+        for path, reason in ((self.root.parent, "결과·설정 폴더"), (repo / "child", "하위 폴더"),
                              (repo / "missing", "찾을 수 없습니다")):
             response = self.client.post("/api/repos", headers=self.headers, json={"path": str(path)})
             self.assertEqual(response.status_code, 422)
@@ -440,3 +440,35 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(self.client.post("/api/settings", headers=self.headers, json={"background_llm": "yes"}).status_code, 422)
         self.client.post("/api/settings", headers=self.headers, json={"background_llm": True})
         self.assertEqual(self.client.get("/api/settings", headers=self.headers).json(), {"background_llm": True})
+
+    def test_plain_folder_is_scanned_through_a_snapshot_without_touching_it(self):
+        source = self.root.parent / "바탕 화면" / "friend-site"  # non-ASCII path, read back from Git config
+        source.mkdir(parents=True)
+        (source / "app.py").write_text('API_TOKEN = "test-credential-first"\n')
+        before = sorted(p.name for p in source.rglob("*"))
+        response = self.client.post("/api/repos", headers=self.headers, json={"path": str(source)})
+        self.assertEqual(response.status_code, 200, response.text)
+        repo = response.json()["path"]
+        self.assertTrue(Path(repo).is_relative_to(self.directory.resolve() / "folders"))
+        self.assertEqual(sorted(p.name for p in source.rglob("*")), before)  # no .git or index written there
+        again = self.client.post("/api/repos", headers=self.headers, json={"path": str(source)})
+        self.assertEqual(again.json()["path"], repo)
+        listed = self.client.get("/api/repos", headers=self.headers).json()["repos"]
+        self.assertIsNone(listed[0]["hook"])
+
+        with patch("vibescan.cli.access_token") as token:
+            for text in ('API_TOKEN = "test-credential-first"\n', 'print("clean")\n'):
+                (source / "app.py").write_text(text)
+                self.client.post("/api/scan", headers=self.headers, json={"path": repo})
+                job = self.wait_scan()
+                self.assertEqual(job["state"], "completed", job)
+            token.assert_not_called()
+        latest = self.client.get("/api/scans/" + job["scan_id"], headers=self.headers).json()
+        self.assertEqual(latest["delta"], {"new": 0, "fixed": 1})  # the edit in the folder was picked up
+        self.assertEqual(sorted(p.name for p in source.rglob("*")), before)
+
+        source.rename(source.with_name("moved"))
+        self.client.post("/api/scan", headers=self.headers, json={"path": repo})
+        job = self.wait_scan()
+        self.assertEqual(job["state"], "failed")
+        self.assertIn("원본 폴더", job["message"])
