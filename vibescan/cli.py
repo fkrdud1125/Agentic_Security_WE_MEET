@@ -13,11 +13,11 @@ from pathlib import Path
 
 import requests
 
-from scanner.history import save_scan
+from scanner.history import compare, list_scans, save_scan
 from scanner.context import Context
 from scanner.ingest import snapshot, languages
 from scanner.kisa import checklist, legacy_coverage
-from scanner.models import ScanResult, Severity, Status, Target
+from scanner.models import Change, ScanResult, Severity, Status, Target
 from scanner.static import inspect, profile
 from . import analysis, inference
 from .register import data_dir
@@ -27,15 +27,18 @@ MANUAL = ["인증·인가 정책 확인", "응답 헤더·쿠키 확인"]
 
 
 def render(result):
-    opened = [f for f in result.findings if f.status == Status.OPEN]
-    dismissed = [f for f in result.findings if f.status == Status.DISMISSED]
+    fixed = [f for f in result.findings if f.change == Change.FIXED]
+    opened = [f for f in result.findings if f.status == Status.OPEN and f.change != Change.FIXED]
+    dismissed = [f for f in result.findings if f.status == Status.DISMISSED and f.change != Change.FIXED]
     rows = [f"# 보안 진단 보고서 — {result.app_name}", "",
             f"- 커밋: `{result.commit}`", f"- 진단 일시: {result.scanned_at.isoformat()}",
             f"- 위험 점수: {result.risk_score}/100 · 검토 대상 {len(opened)}건 · 오탐 후보 {len(dismissed)}건",
             f"- 진단 범위: 커밋된 소스의 정적 패턴 및 시크릿 검사",
             f"- 앱 프로파일: {result.profile.framework or '프레임워크 미확인'} · "
             f"라우트 데코레이터 {result.profile.routes}개 · {result.profile.auth or '인증 방식 미확인'}",
-            f"- 모델 분석: {result.analysis_note}", "",
+            f"- 모델 분석: {result.analysis_note}",
+            f"- 직전 스캔 대비: 새로 생김 {sum(f.change == Change.NEW for f in result.findings)}건 · 해결 {len(fixed)}건 "
+            f"(기준 커밋 `{result.baseline_commit}`)" if result.baseline_commit else "- 직전 스캔 대비: 비교할 이전 결과 없음", "",
             "## 정찰 결과", result.profile.analysis_ko or "로컬 구조 분석만 수행했습니다."]
     rows.extend(f"- {p['file']}:{p['line']} · {p['kind']}: {p['note']}" for p in result.profile.surfaces)
     rows.extend("- " + s for s in result.profile.limitations)
@@ -63,6 +66,9 @@ def render(result):
         for f in dismissed:
             rows.extend([f"- {f.id} · {f.title} · {f.location.file}:{f.location.line}",
                          f"  최초 심각도: {f.original_severity} · 근거: {f.triage_reason}"])
+    if fixed:
+        rows.extend(["", "## 직전 스캔 이후 해결됨"])
+        rows.extend(f"- {f.title} · {f.location.file}:{f.location.line}" for f in fixed)
     rows.extend(["", "## 추가 확인", *["- " + s for s in MANUAL],
                  "- 외부 입력 도달 여부와 제시한 수정 예시는 실제 호출 문맥에서 검토하세요."])
     rows.extend(["", "## 점검 한계", *['- ' + x for x in result.profile.limitations],
@@ -70,6 +76,18 @@ def render(result):
                  '- 규칙팩: ' + result.engine.get('rulepack', '미기록'),
                  '- 점수: 열린 발견의 Critical 40 / High 20 / Medium 10 / Low 3 합계, 최대 100 (기존 방식).'])
     return "\n".join(rows) + "\n"
+
+
+def baseline(database, repo, output):
+    """The newest earlier scan of this repo whose full result is still in the output folder."""
+    if not database.is_file():
+        return None
+    for row in list_scans(database, str(repo)):
+        try:
+            return ScanResult.from_json((output / row["scan_id"] / "scan_result.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue  # moved or damaged result: fall back to an older one, its commit is recorded as the baseline
+    return None
 
 
 class ScanInputError(ValueError):
@@ -128,12 +146,19 @@ def scan(repo, output, directory, offline=False):
     weights = {Severity.CRITICAL: 40, Severity.HIGH: 20, Severity.MEDIUM: 10,
                Severity.LOW: 3, Severity.INFO: 0}
     partial = getattr(findings, 'partial_files', [])
+    previous = baseline(directory / "scan-history.sqlite3", repo, output)
+    matched = compare(findings, previous, commit, partial) if previous else None
+    kept, gone = matched or ([], [])
+    current = list(findings) + kept
+    for number, f in enumerate(kept + gone, len(findings) + 1):
+        f.id = f"F-{number:03}"
     kisa_rows = checklist(findings, languages(files), partial)
     coverage = legacy_coverage(coverage, kisa_rows)
     app.routes = len(getattr(findings, 'routes', [])) or app.routes
     result = ScanResult(scan_id, repo.name, datetime.now(timezone.utc), Target(str(repo)),
-                        min(100, sum(weights[f.severity] for f in findings if f.status == Status.OPEN)), app, list(findings), "",
-                        branch=branch, commit=commit, checklist=[c['name'] for c in coverage],
+                        min(100, sum(weights[f.severity] for f in current if f.status == Status.OPEN)), app, current + gone, "",
+                        branch=branch, commit=commit, baseline_commit=previous.commit if matched else None,
+                        checklist=[c['name'] for c in coverage],
                         analysis_note=note, coverage=coverage,
                         engine={'version': '0.2.0', 'rulepack': 'vibescan-2026.11.1', 'semgrep': '1.185.0'},
                         languages=languages(files), partial_files=partial,

@@ -44,7 +44,8 @@
       <section class="repo-heading"><div><h2 id="repo-name"></h2><p id="repo-meta" class="muted"></p></div>
         <button id="download" type="button">보고서 다운로드 ↓</button></section>
       <section class="metrics" aria-label="진단 요약">
-        <article class="panel score"><span>위험 점수</span><div><strong id="risk"></strong><span> / 100</span></div><small>열린 발견의 가중 합계 · 안전 보증 아님</small></article>
+        <article class="panel score"><span>위험 점수</span><div><strong id="risk"></strong><span> / 100</span></div><small>열린 발견의 가중 합계 · 안전 보증 아님</small>
+          <svg id="risk-trend" class="sparkline" viewBox="0 0 120 36" role="img"></svg><small id="risk-trend-note"></small></article>
         <article class="panel"><span>검토할 발견</span><strong id="total" class="metric"></strong><small id="dismissed"></small></article>
         <article class="panel distribution"><span>심각도 분포</span><div id="severity-bars"></div></article>
         <article class="panel"><span>커밋 변화</span><strong id="delta" class="delta"></strong><small id="delta-note"></small></article>

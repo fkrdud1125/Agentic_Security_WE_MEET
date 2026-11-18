@@ -9,6 +9,7 @@ if (location.hash) {
   history.replaceState(null, "", location.pathname);
 }
 let result = null;
+let scanList = [];
 let detailVersion = 0;
 let scanning = false;
 let pollTimer = null;
@@ -49,7 +50,7 @@ function sortedFindings() {
 function showDetail(f) {
   $("detail-badge").replaceChildren(badge(f.severity));
   $("detail-title").textContent = f.title;
-  $("detail-meta").textContent = `${locationText(f)} · ${f.cwe} · ${f.owasp} · ${f.confidence} · ${statuses[findingStatus(f)]} · 최초 심각도 ${f.original_severity || f.severity}`;
+  $("detail-meta").textContent = `${locationText(f)} · ${f.cwe} · ${f.owasp} · ${f.confidence} · ${statuses[findingStatus(f)]} · 최초 심각도 ${f.original_severity || f.severity}${f.introduced_in ? ` · 처음 발견 커밋 ${f.introduced_in.slice(0, 12)}` : ""}`;
   $("evidence").textContent = f.evidence || "근거 없음";
   $("how-found").textContent = f.how_found.join(" · ");
   $("impact").textContent = f.impact_ko || "영향 설명 없음";
@@ -88,16 +89,45 @@ function filterFindings() {
     $("findings").append(row);
   }
 }
+function renderTrend(d) {
+  // Last 12 scans of this repository up to the one on screen, on the fixed 0-100 risk scale.
+  const points = scanList.filter(s => s.repo.path === d.repo.path && s.scanned_at <= d.scanned_at)
+    .sort((a, b) => a.scanned_at.localeCompare(b.scanned_at)).slice(-12);
+  const svg = $("risk-trend"), ns = "http://www.w3.org/2000/svg";
+  svg.replaceChildren();
+  svg.hidden = points.length < 2;
+  $("risk-trend-note").textContent = points.length < 2 ? "커밋별 추이는 두 번째 스캔부터 표시됩니다" :
+    `최근 ${points.length}회 스캔 추이 · ${points[0].risk_score} → ${d.risk_score}`;
+  svg.setAttribute("aria-label", points.map(p => `${(p.commit || "커밋 미확인").slice(0, 7)} ${p.risk_score}점`).join(", "));
+  if (points.length < 2) return;
+  const xy = points.map((p, i) => [4 + i * 112 / (points.length - 1), 32 - p.risk_score * 0.28]);
+  const shape = (tag, attrs) => {
+    const item = document.createElementNS(ns, tag);
+    for (const [key, value] of Object.entries(attrs)) item.setAttribute(key, value);
+    return item;
+  };
+  svg.append(shape("polyline", {class: "line", points: xy.map(p => p.join(",")).join(" ")}));
+  points.forEach((p, i) => {
+    const [x, y] = xy[i], current = p.scan_id === d.scan_id;
+    svg.append(shape("circle", {class: current ? "now" : "dot", cx: x, cy: y, r: current ? 5 : 4}));
+    const hit = shape("circle", {class: "hit", cx: x, cy: y, r: 9});
+    const label = shape("title", {});
+    label.textContent = `${(p.commit || "커밋 미확인").slice(0, 12)} · 위험 점수 ${p.risk_score} · ${new Date(p.scanned_at).toLocaleString("ko-KR")}`;
+    hit.append(label);
+    svg.append(hit);
+  });
+}
 function render() {
   const d = result;
   $("repo-name").textContent = d.repo.name;
   $("repo-meta").textContent = `${d.repo.branch || "브랜치 미확인"} / ${(d.commit || "커밋 미확인").slice(0, 12)} · ${new Date(d.scanned_at).toLocaleString("ko-KR")} · ${d.repo.path}`;
   $("risk").textContent = d.risk_score;
+  renderTrend(d);
   $("total").textContent = Object.values(d.summary).reduce((a, b) => a + b, 0);
   $("dismissed").textContent = `오탐 후보 ${d.dismissed_count}건 · 목록에서 근거 확인`;
-  const compared = d.scan_type === "diff";
-  $("delta").textContent = compared ? `+${d.delta.new} 새 발견 / ${d.delta.fixed} 해결` : "아직 비교 전";
-  $("delta-note").textContent = compared ? `기준 ${(d.baseline_commit || "").slice(0, 12)}` : "전체 스캔 · 커밋 간 자동 비교는 후속 단계";
+  const compared = Boolean(d.baseline_commit);
+  $("delta").textContent = compared ? `+${d.delta.new} / −${d.delta.fixed}` : "아직 비교 전";
+  $("delta-note").textContent = compared ? `새 발견 ${d.delta.new}건 · 해결 ${d.delta.fixed}건 · 직전 스캔 ${d.baseline_commit.slice(0, 12)} 대비` : "비교할 이전 결과가 없습니다";
   $("severity-bars").replaceChildren();
   for (const level of levels) {
     const row = node("div", "", "bar-row"), meter = document.createElement("meter");
@@ -145,6 +175,7 @@ async function refresh(preferred = null) {
   try {
     const previous = preferred || $("scan-select").value;
     const data = await api("/api/scans");
+    scanList = data.scans;
     $("results-path").textContent = `결과 폴더: ${data.results_path}`;
     $("scan-select").replaceChildren();
     for (const scan of data.scans) {

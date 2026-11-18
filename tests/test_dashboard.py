@@ -176,27 +176,39 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(self.client.post("/api/repos", headers=self.headers, json=body | {"command": "anything"}).status_code, 422)
             engine.assert_not_called()
 
-    def test_real_scan_and_rescan_use_latest_head_without_model_by_default(self):
+    def test_real_scans_compare_with_the_previous_scan_without_model_by_default(self):
         repo = self.repository()
         self.client.post("/api/repos", headers=self.headers, json={"path": str(repo)})
-        ids = []
+        saved = []
+        # 1: first scan has nothing to compare; 2: the secret changes; 3: an unrelated commit keeps it.
+        steps = (("app.py", 'API_TOKEN = "test-credential-first"\n'), ("app.py", 'API_TOKEN = "test-credential-second"\n'),
+                 ("notes.txt", "unrelated\n"))
         with patch("vibescan.cli.access_token") as token:
-            for value in ("first", "second"):
-                (repo / "app.py").write_text(f'API_TOKEN = "test-credential-{value}"\n')
+            for name, text in steps:
+                (repo / name).write_text(text)
                 head = self.commit(repo)
                 response = self.client.post("/api/scan", headers=self.headers, json={"path": str(repo)})
                 self.assertEqual(response.status_code, 202)
                 self.assertTrue(response.json()["offline"])
                 job = self.wait_scan()
                 self.assertEqual(job["state"], "completed", job)
-                ids.append(job["scan_id"])
-                saved = self.client.get("/api/scans/" + job["scan_id"], headers=self.headers).json()
-                self.assertEqual(saved["commit"], head)
-                self.assertEqual(len(saved["findings"]), 1)
-                self.assertNotIn("test-credential-", json.dumps(saved))
+                data = self.client.get("/api/scans/" + job["scan_id"], headers=self.headers).json()
+                self.assertEqual(data["commit"], head)
+                self.assertNotIn("test-credential-", json.dumps(data))
+                saved.append(data)
             token.assert_not_called()
-        self.assertEqual(len(set(ids)), 2)
-        self.assertEqual(len(self.client.get("/api/scans", headers=self.headers).json()["scans"]), 2)
+        first, second, third = saved
+        self.assertIsNone(first["baseline_commit"])
+        self.assertEqual([f["change"] for f in first["findings"]], [None])
+        self.assertEqual(second["baseline_commit"], first["commit"])
+        self.assertEqual(sorted(f["change"] for f in second["findings"]), ["fixed", "new"])
+        self.assertEqual(second["delta"], {"new": 1, "fixed": 1})
+        self.assertEqual(second["risk_score"], first["risk_score"])  # the fixed finding no longer counts
+        self.assertEqual(sum(second["summary"].values()), 1)
+        self.assertIn("직전 스캔 이후 해결됨", second["report_md"])
+        self.assertEqual([(f["change"], f["introduced_in"]) for f in third["findings"]], [("existing", second["commit"])])
+        self.assertEqual(third["delta"], {"new": 0, "fixed": 0})
+        self.assertEqual(len(self.client.get("/api/scans", headers=self.headers).json()["scans"]), 3)
 
     def test_duplicate_scan_is_rejected_and_failure_preserves_previous_results(self):
         repo = self.repository()

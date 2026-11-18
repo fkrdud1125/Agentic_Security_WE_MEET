@@ -8,6 +8,10 @@
 .model-option input{width:auto;accent-color:#087e7d}
 #job-message{color:#176e63;overflow-wrap:anywhere}
 #job-message.error,#auth-status.error{color:#a23c31}
+/* Risk trend: past scans recede in gray, the scan on screen is the accent dot. */
+.sparkline{display:block;width:100%;height:40px;margin-top:10px;overflow:visible}
+.sparkline .line{fill:none;stroke:#a3afba;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+.sparkline .dot{fill:#a3afba}.sparkline .now{fill:#087e7d;stroke:#fff;stroke-width:2}.sparkline .hit{fill:transparent;cursor:default}
 .auth-row{margin-top:14px}
 #auth-status{flex:1;margin:0;color:#176e63;overflow-wrap:anywhere}
 @media(max-width:700px){.scan-controls{flex-wrap:wrap}.scan-controls>label{width:100%}.scan-controls select{flex:1}.connect-row{gap:8px}}

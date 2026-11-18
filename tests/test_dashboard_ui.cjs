@@ -19,7 +19,7 @@ const get = id => {
   return elements.get(id);
 };
 const context = vm.createContext({
-  document: {getElementById: get, createElement: () => new Element()},
+  document: {getElementById: get, createElement: () => new Element(), createElementNS: (ns, tag) => Object.assign(new Element(), {tag})},
   location: {hash: ''}, sessionStorage: {getItem: () => 'test-ticket'},
   fetch: () => new Promise(() => {}),
   clearTimeout() {}, setTimeout() {},
@@ -44,6 +44,20 @@ vm.runInContext('filterFindings()', context);
 assert.equal(get('findings').children.length, 1);
 assert.equal(get('findings').children[0].children[2].textContent, '오탐 후보');
 console.log('Dashboard resolved-status regression: OK');
+
+vm.runInContext(`scanList = [
+  {scan_id:'a', repo:{path:'C:/r'}, commit:'c1', scanned_at:'2026-11-18T01:00:00+00:00', risk_score:40},
+  {scan_id:'other', repo:{path:'C:/elsewhere'}, commit:'x', scanned_at:'2026-11-18T01:30:00+00:00', risk_score:99},
+  {scan_id:'b', repo:{path:'C:/r'}, commit:'c2', scanned_at:'2026-11-18T02:00:00+00:00', risk_score:20},
+  {scan_id:'later', repo:{path:'C:/r'}, commit:'c3', scanned_at:'2026-11-18T03:00:00+00:00', risk_score:0}];
+renderTrend({scan_id:'b', repo:{path:'C:/r'}, scanned_at:'2026-11-18T02:00:00+00:00', risk_score:20});`, context);
+const trend = get('risk-trend');
+assert.equal(trend.hidden, false);
+assert.equal(trend.children.filter(c => c.tag === 'circle').length, 4);  // 2 marks + 2 hover targets
+assert.match(get('risk-trend-note').textContent, /최근 2회 스캔 추이 · 40 → 20/);
+vm.runInContext(`renderTrend({scan_id:'a', repo:{path:'C:/r'}, scanned_at:'2026-11-18T01:00:00+00:00', risk_score:40});`, context);
+assert.equal(trend.hidden, true);
+console.log('Dashboard risk trend: only this repo, up to the scan on screen: OK');
 
 async function scanFlow() {
   get('repo-select').value = 'C:/repo';

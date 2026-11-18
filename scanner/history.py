@@ -3,10 +3,11 @@
 import sqlite3
 import json
 from contextlib import closing
+from dataclasses import replace
 from datetime import timezone
 from pathlib import Path
 
-from .models import ScanResult
+from .models import Change, ScanResult
 
 
 SCHEMA = """
@@ -80,3 +81,29 @@ def list_scans(database: Path, repo_path: str) -> list[dict]:
             ORDER BY scanned_at DESC, scan_id DESC
         """, (repo_path, str(Path(repo_path).expanduser().resolve())))
         return [dict(row) for row in rows]
+
+
+def compare(findings, previous, commit, partial_files=()):
+    """Mark findings new/existing against the previous scan; return its vanished findings as fixed.
+
+    Returns None when the previous scan predates fingerprints and cannot be matched.
+    """
+    before = {}
+    for f in previous.findings:
+        if f.change == Change.FIXED:
+            continue
+        if not f.fingerprint:
+            return None
+        before.setdefault(f.fingerprint, []).append(f)
+    for f in findings:
+        group = before.get(f.fingerprint)
+        if group:
+            old = group.pop()
+            f.change, f.introduced_in = Change.EXISTING, old.introduced_in
+        else:
+            f.change, f.introduced_in = Change.NEW, commit
+    left = [f for group in before.values() for f in group]
+    # A file that failed to parse this time proves nothing about its old findings, so keep them open.
+    kept = [replace(f, change=Change.EXISTING) for f in left if f.location.file in partial_files]
+    gone = [replace(f, change=Change.FIXED) for f in left if f.location.file not in partial_files]
+    return kept, gone

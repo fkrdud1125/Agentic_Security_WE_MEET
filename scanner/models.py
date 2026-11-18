@@ -162,8 +162,6 @@ class ScanResult:
 
         if self.scan_type == ScanType.DIFF and not (self.commit and self.baseline_commit):
             raise ValueError("변경분 스캔에는 대상 커밋과 기준 커밋이 필요합니다.")
-        if self.scan_type == ScanType.FULL and self.baseline_commit is not None:
-            raise ValueError("기준 커밋은 변경분 스캔에만 지정합니다.")
 
         summary = {severity.value: 0 for severity in Severity}
         delta = {"new": 0, "fixed": 0}

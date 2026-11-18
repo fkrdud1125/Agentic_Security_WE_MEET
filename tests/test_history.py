@@ -6,7 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from scanner.history import list_scans, save_scan
+from scanner.history import compare, list_scans, save_scan
 from scanner.models import Change, ScanResult
 
 
@@ -41,6 +41,25 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(data["delta"], {"new": 0, "fixed": 0})
         self.assertEqual(data["summary"]["High"], 1)
         self.assertEqual(ScanResult.from_json(result.to_json()), result)
+
+    def test_compare_matches_by_fingerprint(self):
+        base = ScanResult.from_json(json.dumps(sample())).findings[0]
+        old = lambda fid, fp, file="app.py", **kw: replace(base, id=fid, fingerprint=fp, location=replace(base.location, file=file), **kw)
+        previous = ScanResult.from_json(json.dumps(sample()))
+        previous.commit = "c1"
+        previous.findings = [old("F-001", "same", introduced_in="c0"), old("F-002", "same", introduced_in="c0"),
+                             old("F-003", "gone"), old("F-004", "broken", file="half.py"),
+                             old("F-005", "old-fix", change=Change.FIXED)]
+        now = [old("F-001", "same"), old("F-002", "fresh")]
+        kept, gone = compare(now, previous, "c2", ["half.py"])
+        self.assertEqual([(f.change, f.introduced_in) for f in now], [(Change.EXISTING, "c0"), (Change.NEW, "c2")])
+        # One of two identical fingerprints vanished, so exactly one is fixed; the unparsed file stays open.
+        self.assertEqual(sorted(f.fingerprint for f in gone), ["gone", "same"])
+        self.assertTrue(all(f.change == Change.FIXED for f in gone))
+        self.assertEqual([(f.fingerprint, f.change) for f in kept], [("broken", Change.EXISTING)])
+        self.assertEqual(previous.findings[2].change, None)  # the stored previous result is not mutated
+        previous.findings.append(old("F-006", ""))
+        self.assertIsNone(compare([old("F-001", "same")], previous, "c3"))
 
     def test_commit_scan_snapshots_and_delta(self):
         data = sample()
