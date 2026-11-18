@@ -75,6 +75,7 @@ def scan(repo, output, directory, offline=False):
     scan_id = uuid.uuid4().hex
     coverage = analysis.default_coverage()
     note = "로컬 규칙으로 작성"
+    issue = None  # first model problem, so the dashboard can point to its fix
     active = None
     with tempfile.TemporaryDirectory() as temp:
         source = Path(temp)
@@ -93,9 +94,9 @@ def scan(repo, output, directory, offline=False):
                 note = "코드 문맥 기반 정찰·점검 계획 적용"
             except SessionError as exc:
                 active = None
-                note = f"로컬 규칙으로 작성 · {exc}"
+                note, issue = f"로컬 규칙으로 작성 · {exc}", exc.kind
             except (OSError, ValueError, KeyError, TypeError, sqlite3.Error, requests.RequestException):
-                note = "모델 정찰·계획 확인 실패 · 고정 점검 계획 적용"
+                note, issue = "모델 정찰·계획 확인 실패 · 고정 점검 계획 적용", "error"
         findings = inspect(source, files)
         for check in coverage:
             check["execution"] = ("manual" if check["mode"] == "manual" else
@@ -111,9 +112,11 @@ def scan(repo, output, directory, offline=False):
                     count += analysis.review(context, findings[start:start + 5], *active)
                 except SessionError as exc:
                     note += f" · 남은 검토는 로컬 수정안 사용 ({exc})"
+                    issue = exc.kind
                     break
                 except (ValueError, KeyError, TypeError, requests.RequestException):
                     note += " · 모델 검토 확인 실패 · 남은 항목은 로컬 수정안 사용"
+                    issue = "error"
                     break
             note += f" · 한국어 상세 검토 {count}/{len(findings)}건"
             if len(findings) > 30:
@@ -140,7 +143,7 @@ def scan(repo, output, directory, offline=False):
     except Exception:
         shutil.rmtree(final)
         raise
-    return final, note
+    return final, note, issue
 
 
 def main():
@@ -167,7 +170,7 @@ def main():
             from .login import login
             print(login(directory))
         else:
-            folder, note = scan(args.repo, args.output or directory / "scans", directory, args.offline)
+            folder, note, _ = scan(args.repo, args.output or directory / "scans", directory, args.offline)
             print(f"{folder}\n{note}")
     except (ValueError, RuntimeError, OSError, sqlite3.Error, subprocess.TimeoutExpired) as exc:
         parser.exit(1, f"VibeScan: {exc}\n")

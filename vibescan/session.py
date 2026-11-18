@@ -18,7 +18,10 @@ JWKS = jwt.PyJWKClient(ISSUER + "/.well-known/jwks.json", timeout=10)
 
 
 class SessionError(RuntimeError):
-    pass
+    # kind tells the dashboard which action fixes it: register, login, plan, limit, or error.
+    def __init__(self, message, kind="login"):
+        super().__init__(message)
+        self.kind = kind
 
 
 def registration(directory):
@@ -28,7 +31,7 @@ def registration(directory):
             row = db.execute("SELECT host, client FROM installation WHERE id=1").fetchone()
             if row and row[1]:
                 return row
-    raise SessionError("먼저 python -m vibescan.register 로 이 PC를 등록하세요.")
+    raise SessionError("먼저 python -m vibescan.register 로 이 PC를 등록하세요.", "register")
 
 
 @contextmanager
@@ -71,7 +74,7 @@ def token_request(client, **form):
     if response.status_code != 200:
         if response.status_code in (400, 401) and response.json().get("error") == "invalid_grant":
             raise InvalidGrant("승인이 만료되었습니다. vibescan login 으로 다시 연결하세요.")
-        raise SessionError(f"토큰 요청 실패 (HTTP {response.status_code}).")
+        raise SessionError(f"토큰 요청 실패 (HTTP {response.status_code}).", "error")
     return response.json()
 
 
@@ -137,3 +140,24 @@ def access_token(directory):
             if PLAN in record["scope"].split():
                 return record["access_token"]
     raise SessionError("구독 사용을 다시 승인하려면 vibescan login 을 실행하세요.")
+
+
+def status(directory):
+    """Report the saved login state without refreshing tokens or touching the network."""
+    try:
+        _, client = registration(directory)
+    except SessionError as exc:
+        return {"state": "register", "message": str(exc)}
+    path = directory / "session.sqlite3"
+    record = {}
+    if path.is_file():
+        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as db:
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'").fetchone():
+                record = read_record(db, client)
+    if not record:
+        return {"state": "login", "message": "ChatGPT 로그인이 필요합니다."}
+    if PLAN not in record.get("scope", "").split():
+        return {"state": "plan", "message": "구독 사용 승인이 없거나 만료되었습니다. Plus/Pro 구독을 확인하고 다시 로그인하세요."}
+    if record["expires_at"] <= time.time() + 60 and not record.get("refresh_token"):
+        return {"state": "login", "message": "세션이 만료되었습니다. 다시 로그인하세요."}
+    return {"state": "ready", "message": "ChatGPT 연결됨 · 구독 사용 가능"}

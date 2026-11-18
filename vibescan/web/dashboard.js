@@ -13,6 +13,8 @@ let detailVersion = 0;
 let scanning = false;
 let pollTimer = null;
 let jobVersion = 0;
+let auth = null;
+let authTimer = null;
 
 function node(tag, text, className) {
   const item = document.createElement(tag);
@@ -162,9 +164,18 @@ function jobMessage(text, error = false) {
   $("job-message").textContent = text;
   $("job-message").classList.toggle("error", error);
 }
+// What the user can do about each model problem the engine reports (SessionError.kind).
+const issueHints = {
+  limit: "ChatGPT 사용량 한도에 도달했습니다. ChatGPT 설정의 사용량(Usage)에서 이 앱의 한도를 확인하세요.",
+  plan: "ChatGPT Plus/Pro 구독과 ‘Use your ChatGPT plan’ 승인이 필요합니다.",
+  login: "ChatGPT 연결이 필요합니다. 위의 ‘ChatGPT로 로그인’을 누르세요.",
+  register: "먼저 터미널에서 python -m vibescan.register 로 이 PC를 등록하세요.",
+  error: "모델 분석 일부를 완료하지 못했습니다.",
+};
 function busy(running) {
   scanning = running;
-  for (const id of ["connect", "repo-path", "use-model"]) $(id).disabled = running;
+  for (const id of ["connect", "repo-path"]) $(id).disabled = running;
+  $("use-model").disabled = running || auth?.state !== "ready";
   $("repo-select").disabled = running || !$("repo-select").value;
   $("scan").disabled = running || !$("repo-select").value;
   $("scan").textContent = running ? "스캔 중…" : "다시 스캔";
@@ -194,6 +205,9 @@ async function pollJob() {
     if (scanning) {
       jobMessage(`${job.repo} · ${job.offline ? "정적 검사" : "정적 검사 및 ChatGPT 분석"} 진행 중입니다. 완료되면 결과가 자동으로 열립니다.`);
       pollTimer = setTimeout(pollJob, 1000);
+    } else if (job.state === "completed" && job.issue) {
+      jobMessage(`스캔 완료 · 정적 검사 결과는 저장되었습니다. ${issueHints[job.issue] || ""} (${job.message})`, true);
+      await Promise.all([refresh(job.scan_id), loadAuth()]);
     } else if (job.state === "completed") {
       jobMessage(`스캔 완료 · ${job.message}`);
       await refresh(job.scan_id);
@@ -213,6 +227,32 @@ $("connect-form").addEventListener("submit", async event => {
     jobMessage(`${repo.name} 연결 완료 · ${repo.branch || "분리된 HEAD"} / ${repo.commit.slice(0, 12)}. ‘다시 스캔’을 눌러 검사하세요.`);
   } catch (error) { jobMessage(error.message, true); }
   finally { $("connect").disabled = scanning; }
+});
+async function loadAuth() {
+  clearTimeout(authTimer);
+  try {
+    auth = await api("/api/auth");
+    const running = auth.login.state === "running";
+    const failed = auth.login.state === "failed" && auth.state !== "ready";
+    $("auth-status").textContent = running ? auth.login.message : failed ? `${auth.login.message} · ${auth.message}` : auth.message;
+    $("auth-status").classList.toggle("error", !running && auth.state !== "ready");
+    $("login").hidden = auth.state === "register";
+    $("login").disabled = running;
+    $("login").textContent = auth.state === "ready" ? "다시 로그인" : "ChatGPT로 로그인";
+    if (auth.state !== "ready") $("use-model").checked = false;
+    if (running) authTimer = setTimeout(loadAuth, 1500);
+  } catch (error) {
+    auth = null;
+    $("auth-status").textContent = error.message;
+    $("auth-status").classList.add("error");
+  }
+  busy(scanning);
+}
+$("login").addEventListener("click", async () => {
+  $("login").disabled = true;
+  try { await api("/api/login", {}); }
+  catch (error) { $("auth-status").textContent = error.message; $("auth-status").classList.add("error"); }
+  await loadAuth();
 });
 $("repo-select").addEventListener("change", () => busy(scanning));
 $("scan").addEventListener("click", async () => {
@@ -242,4 +282,5 @@ $("download").addEventListener("click", () => {
 });
 refresh();
 loadRepos().catch(error => jobMessage(error.message, true));
+loadAuth();
 pollJob();

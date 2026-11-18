@@ -58,12 +58,13 @@ class PipelineTests(unittest.TestCase):
         plan["checks"].reverse()
         review = review_answer([{"id": "F-001", "severity": "High"}])
         # This fixture contains only a literal credential, so there are no surface points.
-        for response in ([plan, review], [inference.SessionError("사용량 한도")]):
+        for response in ([plan, review], [inference.SessionError("사용량 한도", "limit")]):
             with patch("scanner.static.semgrep", return_value=[]), \
                  patch.object(cli, "access_token", return_value="private-test-token"), \
                  patch.object(inference, "model_for", return_value="model"), \
                  patch.object(inference, "ask", side_effect=response) as ask:
-                folder, note = cli.scan(self.repo, out, state)
+                folder, note, issue = cli.scan(self.repo, out, state)
+            self.assertEqual(issue, None if len(response) == 2 else "limit")
             result = ScanResult.from_json((folder / "scan_result.json").read_text(encoding="utf-8"))
             self.assertEqual(len(result.findings), 1)
             self.assertNotIn("private-value", str(ask.call_args_list))
@@ -123,7 +124,7 @@ class PipelineTests(unittest.TestCase):
                 patch.object(cli, "access_token", return_value="t"), \
                 patch.object(inference, "model_for", return_value="m"), \
                 patch.object(inference, "ask", side_effect=[plan_answer(), reply]):
-            folder, _ = cli.scan(self.repo, self.base / "out", self.base / "state")
+            folder, _, _ = cli.scan(self.repo, self.base / "out", self.base / "state")
         data = json.loads((folder / "scan_result.json").read_text(encoding="utf-8"))
         self.assertEqual(data["risk_score"], 0)
         self.assertEqual(data["summary"]["High"], 0)
@@ -142,9 +143,10 @@ class PipelineTests(unittest.TestCase):
         with patch.object(cli, "inspect", return_value=findings), \
                 patch.object(cli, "access_token", return_value="t"), \
                 patch.object(inference, "model_for", return_value="m"), \
-                patch.object(inference, "ask", side_effect=[plan_answer(), first, inference.SessionError("사용량 한도")]) as ask:
-            folder, note = cli.scan(self.repo, self.base / "out", self.base / "state")
+                patch.object(inference, "ask", side_effect=[plan_answer(), first, inference.SessionError("사용량 한도", "limit")]) as ask:
+            folder, note, issue = cli.scan(self.repo, self.base / "out", self.base / "state")
         self.assertEqual(ask.call_count, 3)
+        self.assertEqual(issue, "limit")
         self.assertIn("5/32", note)
         data = json.loads((folder / "scan_result.json").read_text(encoding="utf-8"))
         self.assertEqual(len(data["findings"]), 32)
@@ -160,7 +162,7 @@ class PipelineTests(unittest.TestCase):
         with patch.object(cli, "access_token", return_value="t"), \
                 patch.object(inference, "model_for", return_value="m"), \
                 patch.object(inference, "ask", return_value=plan_answer()) as ask:
-            folder, _ = cli.scan(self.repo, self.base / "out", self.base / "state")
+            folder, _, _ = cli.scan(self.repo, self.base / "out", self.base / "state")
         self.assertEqual(ask.call_count, 1)
         data = json.loads((folder / "scan_result.json").read_text(encoding="utf-8"))
         self.assertEqual(data["findings"], [])
@@ -172,7 +174,8 @@ class PipelineTests(unittest.TestCase):
                 patch.object(cli, "access_token", return_value="t"), \
                 patch.object(inference, "model_for", return_value="m"), \
                 patch.object(inference, "ask", side_effect=[{"checks": []}, reply]):
-            folder, note = cli.scan(self.repo, self.base / "out", self.base / "state")
+            folder, note, issue = cli.scan(self.repo, self.base / "out", self.base / "state")
         self.assertIn("고정 점검 계획", note)
+        self.assertEqual(issue, "error")
         self.assertIn("1/1", note)
         self.assertEqual(len(json.loads((folder / "scan_result.json").read_text(encoding="utf-8"))["coverage"]), 5)

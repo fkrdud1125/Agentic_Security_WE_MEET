@@ -81,5 +81,31 @@ async function scanFlow() {
   assert.equal(get('result').hidden, false);
   assert.match(get('job-message').textContent, /스캔 완료/);
   console.log('Dashboard scan states, explicit POST, and result refresh: OK');
+
+  const authFetch = data => async () => ({ok: true, json: async () => data});
+  get('use-model').checked = true;
+  context.fetch = authFetch({state:'plan', message:'구독 필요', login:{state:'idle'}});
+  await vm.runInContext('loadAuth()', context);
+  assert.equal(get('use-model').checked, false);
+  assert.equal(get('use-model').disabled, true);
+  assert.equal(get('login').hidden, false);
+  assert.equal(get('auth-status').textContent, '구독 필요');
+  context.fetch = authFetch({state:'register', message:'register first', login:{state:'idle'}});
+  await vm.runInContext('loadAuth()', context);
+  assert.equal(get('login').hidden, true);
+  context.fetch = authFetch({state:'ready', message:'연결됨', login:{state:'idle'}});
+  await vm.runInContext('loadAuth()', context);
+  assert.equal(get('use-model').disabled, false);
+  assert.equal(get('login').textContent, '다시 로그인');
+
+  context.fetch = async url => ({ok: true, json: async () => url === '/api/scan'
+    ? {state:'completed', scan_id:'new-scan', message:'모델 응답 생성 실패', issue:'limit'}
+    : url === '/api/auth' ? {state:'ready', message:'연결됨', login:{state:'idle'}}
+    : url === '/api/scans' ? {scans:[saved],unavailable:0,results_path:'C:/out'} : saved});
+  await vm.runInContext('pollJob()', context);
+  assert.match(get('job-message').textContent, /정적 검사 결과는 저장/);
+  assert.match(get('job-message').textContent, /사용량 한도/);
+  assert.equal(get('scan-select').value, 'new-scan');
+  console.log('Dashboard login states and model failure hints: OK');
 }
 scanFlow().catch(error => { console.error(error); process.exitCode = 1; });

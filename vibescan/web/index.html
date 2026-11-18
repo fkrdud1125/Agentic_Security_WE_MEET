@@ -26,8 +26,9 @@
         <div class="connect-row"><input id="repo-path" required maxlength="4096" placeholder="예: C:\projects\my-app" autocomplete="off"><button id="connect" type="submit">레포 연결</button></div>
       </form>
       <div class="connect-row scan-controls"><label for="repo-select">연결된 레포</label><select id="repo-select" disabled><option value="">연결된 레포 없음</option></select><button id="scan" type="button" disabled>다시 스캔</button></div>
-      <label class="model-option"><input id="use-model" type="checkbox"> ChatGPT 분석 사용 (로그인 필요)</label>
-      <p class="muted">현재 HEAD의 전체 정적 검사입니다. 미커밋 변경은 제외합니다.<br>ChatGPT 분석을 선택하면 비밀값을 가린 코드 일부를 OpenAI로 보냅니다. 로그인은 터미널에서 <code>vibescan login</code>으로 진행하세요.</p>
+      <div class="connect-row auth-row"><p id="auth-status" role="status" aria-live="polite">ChatGPT 연결 상태를 확인하는 중입니다.</p><button id="login" type="button" hidden>ChatGPT로 로그인</button></div>
+      <label class="model-option"><input id="use-model" type="checkbox" disabled> ChatGPT 분석 사용 (로그인 필요)</label>
+      <p class="muted">현재 HEAD의 전체 정적 검사입니다. 미커밋 변경은 제외합니다.<br>ChatGPT 분석을 선택하면 비밀값을 가린 코드 일부를 OpenAI로 보내며, 내 ChatGPT 구독 사용량이 차감됩니다.</p>
       <p id="job-message" role="status" aria-live="polite"></p>
     </section>
     <section class="panel selector">

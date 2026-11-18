@@ -17,7 +17,8 @@ def request(method, path, token, **kwargs):
                 429: "ChatGPT 사용량 한도에 도달했습니다."}
         stage = "모델 목록 조회" if path == "/models" else "모델 응답 생성"
         detail = info.get(response.status_code, f"HTTP {response.status_code}")
-        raise SessionError(f"{stage} 실패 · {detail}")
+        raise SessionError(f"{stage} 실패 · {detail}",
+                           {401: "login", 403: "plan", 429: "limit"}.get(response.status_code, "error"))
     return response
 
 
@@ -26,7 +27,7 @@ def model_for(token):
         for model in response.json()["models"]:
             if model.get("visibility") == "list" and model.get("slug"):
                 return model["slug"]
-    raise SessionError("이 계정에서 사용 가능한 모델이 없습니다.")
+    raise SessionError("이 계정에서 사용 가능한 모델이 없습니다.", "plan")
 
 
 def ask(token, model, instruction, data):
@@ -61,4 +62,4 @@ def ask(token, model, instruction, data):
                 break
             elif event["type"] in ("error", "response.failed", "response.incomplete"):
                 break
-    raise SessionError("모델 응답을 완전히 수신하지 못했습니다.")
+    raise SessionError("모델 응답을 완전히 수신하지 못했습니다.", "error")

@@ -21,7 +21,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from scanner.ingest import git
 from scanner.models import ScanResult
 from .cli import scan
+from .login import login
 from .register import data_dir
+from .session import status
 
 ASSETS = Path(__file__).with_name("web")
 
@@ -41,6 +43,7 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
     database = directory / "scan-history.sqlite3"
     lock = threading.Lock()
     job = {"state": "idle"}
+    sign_in = {"state": "idle"}
     worker = None
 
     @asynccontextmanager
@@ -54,17 +57,23 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
     def repository(raw):
         try:
             path = Path(raw).expanduser().resolve()
+            exists = path.is_dir()
+        except (ValueError, OSError):
+            exists = False
+        if not exists:
+            raise HTTPException(422, "폴더를 찾을 수 없습니다. 경로가 맞는지 확인하세요.")
+        try:
             top = Path(os.fsdecode(git(path, "rev-parse", "--show-toplevel").rstrip(b"\r\n"))).resolve()
-            if path != top:
-                raise ValueError("Not repository root")
             commit = git(path, "rev-parse", "--verify", "HEAD^{commit}").decode().strip()
             branch = git(path, "rev-parse", "--abbrev-ref", "HEAD").decode().strip()
-            if root.is_relative_to(path) or directory.is_relative_to(path):
-                raise ValueError("Output inside repository")
-            return {"path": str(path), "name": path.name, "commit": commit,
-                    "branch": None if branch == "HEAD" else branch}
         except (ValueError, OSError, subprocess.TimeoutExpired):
-            raise HTTPException(422, "커밋이 있는 로컬 Git 저장소의 루트를 지정하세요. 결과·설정 폴더는 저장소 밖에 있어야 합니다.") from None
+            raise HTTPException(422, "Git 저장소가 아니거나 커밋이 없습니다. git init 후 첫 커밋을 만드세요.") from None
+        if path != top:
+            raise HTTPException(422, f"저장소의 하위 폴더입니다. 저장소 루트를 지정하세요: {top}")
+        if root.is_relative_to(path) or directory.is_relative_to(path):
+            raise HTTPException(422, "결과·설정 폴더가 이 저장소 안에 있습니다. 저장소 밖의 폴더를 사용하세요.")
+        return {"path": str(path), "name": path.name, "commit": commit,
+                "branch": None if branch == "HEAD" else branch}
 
     def connected():
         if not database.exists():
@@ -96,8 +105,8 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
     def run_scan(repo, offline):
         nonlocal job
         try:
-            folder, note = scan(Path(repo), root, directory, offline=offline)
-            completed = {"state": "completed", "repo": repo, "scan_id": folder.name, "message": note}
+            folder, note, issue = scan(Path(repo), root, directory, offline=offline)
+            completed = {"state": "completed", "repo": repo, "scan_id": folder.name, "message": note, "issue": issue}
         except subprocess.TimeoutExpired:
             completed = {"state": "failed", "repo": repo, "message": "검사 시간이 초과되었습니다. 기존 결과는 유지됩니다."}
         except Exception:
@@ -134,6 +143,40 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
     def scan_status():
         with lock:
             return dict(job)
+
+    def run_login():
+        nonlocal sign_in
+        try:
+            done = {"state": "completed", "message": login(directory)}
+        except RuntimeError as exc:
+            # login() and SessionError messages are written by VibeScan and hold no tokens.
+            done = {"state": "failed", "message": str(exc)}
+        except Exception:
+            done = {"state": "failed", "message": "로그인에 실패했습니다. 다시 시도하세요."}
+        with lock:
+            sign_in = done
+
+    @app.get("/api/auth")
+    def auth():
+        try:
+            state = status(directory)
+        except Exception:
+            # Unreadable or undecryptable session files must not leak details over HTTP.
+            state = {"state": "login", "message": "로그인 정보를 읽을 수 없습니다. 다시 로그인하세요."}
+        with lock:
+            return state | {"login": dict(sign_in)}
+
+    @app.post("/api/login", status_code=202)
+    def start_login():
+        nonlocal sign_in
+        with lock:
+            if sign_in["state"] == "running":
+                raise HTTPException(409, "이미 로그인 창이 열려 있습니다. 브라우저에서 승인을 마치세요.")
+            sign_in = {"state": "running",
+                       "message": "브라우저에서 ChatGPT 로그인과 구독 사용 승인을 진행하세요. 5분 안에 완료해야 합니다."}
+            # Daemon: an abandoned login window must not keep the dashboard from exiting.
+            threading.Thread(target=run_login, daemon=True).start()
+            return dict(sign_in)
 
     @app.middleware("http")
     async def local_only(request, call_next):

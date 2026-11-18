@@ -97,7 +97,8 @@ class SessionTests(unittest.TestCase):
             return result
 
         with patch.object(inference, "request", side_effect=provider) as remote:
-            folder, note = cli.scan(repo, self.directory / "reports", self.directory)
+            folder, note, issue = cli.scan(repo, self.directory / "reports", self.directory)
+        self.assertIsNone(issue)
         self.assertEqual(remote.call_count, 3)
         self.assertIn("3/3", note)
         result = ScanResult.from_json((folder / "scan_result.json").read_text(encoding="utf-8"))
@@ -108,6 +109,22 @@ class SessionTests(unittest.TestCase):
         self.assertIn("+    return escape(title)", markup.fix_diff)
         self.assertEqual(len(result.coverage), 5)
         self.assertEqual(result.report_md, (folder / "report.md").read_text(encoding="utf-8"))
+
+    def test_status_reports_each_login_state_without_network(self):
+        def saved(record):
+            with session.transaction(self.directory) as db:
+                session.save(db, "issued", record)
+            return session.status(self.directory)["state"]
+
+        with patch.object(session, "token_request") as remote:
+            self.assertEqual(session.status(self.directory)["state"], "login")
+            self.assertEqual(saved({"sub": "s", "scope": ""}), "plan")
+            ready = {"sub": "s", "scope": session.PLAN, "access_token": "a", "expires_at": time.time() - 10}
+            self.assertEqual(saved(ready | {"refresh_token": "r"}), "ready")
+            self.assertEqual(saved(ready), "login")
+            remote.assert_not_called()
+        with patch("vibescan.session.registration", side_effect=session.SessionError("register first", "register")):
+            self.assertEqual(session.status(self.directory)["state"], "register")
 
     def test_identity_rejections(self):
         for token in (self.identity("other"), self.identity(issuer="bad"), self.identity(audience="bad")):
@@ -130,7 +147,7 @@ class SessionTests(unittest.TestCase):
             self.assertEqual(data["refresh_token"], "two")
             data["expires_at"] = 0
             session.save(db, "issued", data)
-        with patch.object(session, "token_request", side_effect=session.InvalidGrant()) as refresh:
+        with patch.object(session, "token_request", side_effect=session.InvalidGrant("revoked")) as refresh:
             for _ in range(2):
                 with self.assertRaises(session.SessionError):
                     session.access_token(self.directory)
@@ -154,8 +171,9 @@ class SessionTests(unittest.TestCase):
                  patch.object(cli, "snapshot", side_effect=snapshot), \
                  patch("scanner.static.semgrep", return_value=[]), \
                  patch.object(inference, "request") as remote:
-                folder, note = cli.scan(repo, self.directory / "out", self.directory)
+                folder, note, issue = cli.scan(repo, self.directory / "out", self.directory)
                 remote.assert_not_called()
+                self.assertEqual(issue, "login")
                 self.assertIn("계정 검증에 실패", note)
                 result = ScanResult.from_json((folder / "scan_result.json").read_text(encoding="utf-8"))
                 self.assertEqual(len(result.findings), 1)

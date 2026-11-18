@@ -7,7 +7,9 @@
 .model-option{display:flex;align-items:center;gap:8px;margin:16px 0 6px}
 .model-option input{width:auto;accent-color:#087e7d}
 #job-message{color:#176e63;overflow-wrap:anywhere}
-#job-message.error{color:#a23c31}
+#job-message.error,#auth-status.error{color:#a23c31}
+.auth-row{margin-top:14px}
+#auth-status{flex:1;margin:0;color:#176e63;overflow-wrap:anywhere}
 @media(max-width:700px){.scan-controls{flex-wrap:wrap}.scan-controls>label{width:100%}.scan-controls select{flex:1}.connect-row{gap:8px}}
 
 *{box-sizing:border-box}

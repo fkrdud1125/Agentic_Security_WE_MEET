@@ -143,8 +143,11 @@ class DashboardTests(unittest.TestCase):
         self.assertFalse(self.directory.exists())
         repo = self.repository()
         (repo / "child").mkdir()
-        for path in (self.root.parent, repo / "child", repo / "missing"):
-            self.assertEqual(self.client.post("/api/repos", headers=self.headers, json={"path": str(path)}).status_code, 422)
+        for path, reason in ((self.root.parent, "Git 저장소가 아니"), (repo / "child", "하위 폴더"),
+                             (repo / "missing", "찾을 수 없습니다")):
+            response = self.client.post("/api/repos", headers=self.headers, json={"path": str(path)})
+            self.assertEqual(response.status_code, 422)
+            self.assertIn(reason, response.json()["detail"])
         for path in (str(repo), str(repo) + "/."):
             response = self.client.post("/api/repos", headers=self.headers, json={"path": path})
             self.assertEqual(response.status_code, 200)
@@ -155,7 +158,9 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(rows, [{"path": str(repo.resolve()), "name": "repo"}])
         with TestClient(dashboard_app(repo / "out", "127.0.0.1:8765", "test-ticket", self.directory),
                         base_url="http://127.0.0.1:8765") as inside:
-            self.assertEqual(inside.post("/api/repos", headers=self.headers, json={"path": str(repo)}).status_code, 422)
+            response = inside.post("/api/repos", headers=self.headers, json={"path": str(repo)})
+            self.assertEqual(response.status_code, 422)
+            self.assertIn("저장소 안에", response.json()["detail"])
 
     def test_scan_posts_require_access_and_a_connected_repository(self):
         repo = self.repository()
@@ -216,6 +221,41 @@ class DashboardTests(unittest.TestCase):
             self.assertNotIn("PRIVATE", json.dumps(job))
             engine.assert_called_once_with(repo.resolve(), self.root.resolve(), self.directory.resolve(), offline=False)
         self.assertEqual(old.read_bytes(), before)
-        with patch("vibescan.dashboard.scan", return_value=(old.parent, "retry complete")):
+        with patch("vibescan.dashboard.scan", return_value=(old.parent, "quota reached", "limit")):
             self.assertEqual(self.client.post("/api/scan", headers=self.headers, json={"path": str(repo)}).status_code, 202)
-            self.assertEqual(self.wait_scan()["state"], "completed")
+            job = self.wait_scan()
+            self.assertEqual((job["state"], job["issue"]), ("completed", "limit"))
+
+    def wait_login(self):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            data = self.client.get("/api/auth", headers=self.headers).json()
+            if data["login"]["state"] != "running":
+                return data
+            time.sleep(0.02)
+        self.fail("Login did not finish")
+
+    def test_login_status_and_single_login_window(self):
+        self.assertEqual(self.client.get("/api/auth").status_code, 403)
+        self.assertEqual(self.client.post("/api/login", json={}).status_code, 403)
+        self.assertEqual(self.client.get("/api/auth", headers=self.headers).json()["state"], "register")
+        release = threading.Event()
+
+        def signed_in(directory):
+            self.assertEqual(directory, self.directory.resolve())
+            release.wait(5)
+            return "로그인 완료 · 구독 사용 가능"
+
+        with patch("vibescan.dashboard.login", side_effect=signed_in),                 patch("vibescan.dashboard.status", return_value={"state": "ready", "message": "ok"}):
+            try:
+                self.assertEqual(self.client.post("/api/login", headers=self.headers, json={}).status_code, 202)
+                self.assertEqual(self.client.post("/api/login", headers=self.headers, json={}).status_code, 409)
+            finally:
+                release.set()
+            data = self.wait_login()
+            self.assertEqual((data["state"], data["login"]["state"]), ("ready", "completed"))
+        with patch("vibescan.dashboard.login", side_effect=ValueError("PRIVATE-CODE")),                 patch("vibescan.dashboard.status", side_effect=OSError("PRIVATE-PATH")):
+            self.client.post("/api/login", headers=self.headers, json={})
+            data = self.wait_login()
+            self.assertEqual((data["state"], data["login"]["state"]), ("login", "failed"))
+            self.assertNotIn("PRIVATE", json.dumps(data))
