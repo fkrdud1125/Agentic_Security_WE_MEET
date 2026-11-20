@@ -499,6 +499,7 @@ async function loadAuth() {
     $("login").textContent = auth.state === "ready" ? "다시 로그인" : "ChatGPT로 로그인";
     $("logout").hidden = !["ready", "plan"].includes(auth.state); $("logout").disabled = running;
     $("register-hint").hidden = auth.state !== "register";
+    $("account-state").hidden = auth.state === "register" && !running;  // the notice below already says it
     if (running && loginRequested && auth.login.url) { location.assign(auth.login.url); return; }
     if (running) authTimer = setTimeout(loadAuth, loginRequested ? 300 : 1500);
   } catch (error) {

@@ -227,7 +227,7 @@ async function main() {
   await scan.get("download").click(); assert.equal(await scan.downloads[0].text(), "# 보고서");
   scan.respond(url => url === "/api/auth" ? {state:"register",message:"등록 필요",login:{state:"idle"}} : {});
   await scan.run("loadAuth()");
-  assert.equal(scan.get("login").hidden, true); assert.equal(scan.get("register-hint").hidden, false);
+  assert.equal(scan.get("login").hidden, true); assert.equal(scan.get("register-hint").hidden, false); assert.equal(scan.get("account-state").hidden, true);
   assert.equal(scan.get("mode-ai").disabled, true);
   console.log("Explicit offline POST, progress, AI failure recovery, report download and auth gating: OK");
 
