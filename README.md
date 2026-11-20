@@ -1,135 +1,183 @@
-# WE_MEET
+# VibeScan
 
-VibeScan은 사용자 PC에서 Git 저장소를 점검하고, 발견한 문제의 위치와 수정 방법을 한국어로 알려주는 보안 진단기입니다. CLI에서 로그인 → 코드 정찰·점검 계획 → 정적 검사·트리아지 → JSON·한국어 보고서 저장까지 수행하며, 로컬 대시보드에서 저장된 결과를 확인할 수 있습니다.
+**바이브코딩으로 만든 웹서비스의 보안 취약점을 내 PC에서 찾아 주는 도구입니다.**
 
-## 저장소 구조
+AI 도구로 빠르게 만든 웹앱에는 소스에 박힌 API 키, SQL 인젝션, XSS, 인증 없는 관리자 API 같은 실수가 자주 섞입니다. VibeScan은 프로젝트 폴더를 읽어 이런 문제를 찾고, **어디가 왜 위험한지와 어떻게 고치는지**를 한국어로 보여 줍니다.
+
+- **내 PC에서만 동작합니다.** 코드를 서버에 올리지 않습니다. 대시보드도 `127.0.0.1`에서만 열립니다.
+- **근거 코드와 수정안을 함께 보여 줍니다.** 발견마다 실제 코드, 문제 설명, 수정 예시를 확인할 수 있습니다.
+- **커밋할 때마다 자동으로 검사합니다.** 켜 두면 새로 생긴 위험을 알려 줍니다(선택).
+- **ChatGPT 구독으로 더 깊이 분석합니다.** API 키 없이 내 ChatGPT 계정으로 오탐을 걸러 내고 내 코드에 맞는 수정안을 받습니다(선택).
+
+> VibeScan의 결과는 정적 분석으로 찾은 **후보**입니다. 안전을 보증하지 않으며, 실제 수정 전에는 코드를 직접 확인하세요.
+
+## 준비물
+
+| 필요한 것 | 확인 명령 | 비고 |
+| --- | --- | --- |
+| Python 3.11 이상 | `python --version` | [python.org](https://www.python.org/downloads/)에서 설치. Windows는 설치 화면에서 **Add python.exe to PATH**를 체크하세요. |
+| Git | `git --version` | [git-scm.com](https://git-scm.com/downloads)에서 설치 |
+| ChatGPT Plus/Pro 구독 | — | **선택 사항.** AI 심층 분석을 쓸 때만 필요합니다. |
+
+검사 엔진(Semgrep)은 아래 설치 과정에서 함께 설치됩니다. 지원 운영체제는 Windows, macOS, Linux입니다.
+
+## 설치
+
+처음 한 번만 하면 됩니다.
+
+**Windows (PowerShell)**
+
+```powershell
+git clone https://github.com/jubin0615/WE_MEET.git
+cd WE_MEET
+python -m venv .venv
+.\.venv\Scripts\python -m pip install -e .
+```
+
+**macOS / Linux**
+
+```sh
+git clone https://github.com/jubin0615/WE_MEET.git
+cd WE_MEET
+python3 -m venv .venv
+.venv/bin/python -m pip install -e .
+```
+
+`.venv`는 VibeScan 전용 가상환경이라 PC의 다른 Python 프로그램에 영향을 주지 않습니다. 설치에는 1~2분이 걸립니다.
+
+## 실행하기
+
+```powershell
+.\.venv\Scripts\vibescan          # Windows
+```
+
+```sh
+.venv/bin/vibescan                # macOS / Linux
+```
+
+기본 브라우저에 대시보드가 열립니다. 종료하려면 실행한 터미널에서 `Ctrl+C`를 누르세요. 터미널에 표시되는 접속 주소에는 열람 권한이 들어 있으니 다른 사람과 공유하지 마세요.
+
+### 처음 검사해 보기
+
+1. 왼쪽 사이드바의 **+ 프로젝트 추가**를 누르고, 검사할 프로젝트를 입력합니다.
+   - 내 PC의 프로젝트 폴더: `C:\Users\me\projects\my-app`
+   - GitHub 주소: `https://github.com/소유자/저장소`
+2. **지금 첫 스캔 실행**(또는 상단 **지금 스캔**)을 누릅니다. 위쪽에 진행 단계가 표시되고, 끝나면 결과가 열립니다.
+3. **보안 상태** 카드에서 위험 등급(심각 / 위험 / 주의 / 낮음 / 발견 없음)과 점수를 확인합니다.
+4. 발견 목록에서 항목을 누르면 오른쪽에 **무엇이 문제인가요 · 근거 코드 · 어떻게 고치나요 · 수정안**이 열립니다. 수정안은 **수정안 복사**로 가져갈 수 있으며 자동으로 적용되지는 않습니다.
+5. 상단 **보고서**로 한국어 보고서(Markdown)를 내려받을 수 있습니다.
+
+### 어떤 프로젝트를 넣을 수 있나요
+
+| 입력 | 검사 대상 | 참고 |
+| --- | --- | --- |
+| Git 저장소 폴더 | 마지막 커밋(HEAD)의 모든 파일 | 아직 커밋하지 않은 변경은 검사하지 않습니다. |
+| Git이 아닌 일반 폴더 | 그 순간의 폴더 파일 | 원본 폴더는 바꾸지 않습니다. 스캔할 때마다 새로 읽습니다. |
+| GitHub 주소 | 기본 브랜치의 최신 커밋 | 내 PC에 복제해 두고, 스캔할 때마다 최신 커밋을 받아옵니다. 비공개 저장소는 PC에 설정된 Git 인증이 필요합니다. |
+
+탐지 규칙은 **Python, JavaScript/TypeScript, HTML 템플릿**(Jinja·Vue·Svelte 등)을 다룹니다. PHP·Ruby·Go·Java 파일은 인증정보 노출만 확인하며, 이런 언어가 주 언어이면 결과에 "불완전" 안내가 표시됩니다.
+
+## AI 심층 분석 연결하기 (선택)
+
+ChatGPT Plus/Pro 구독이 있으면 VibeScan이 내 코드 문맥을 보고 오탐을 걸러 내고, 내 코드에 맞는 수정안을 만듭니다. API 키는 필요 없습니다.
+
+1. **이 PC를 한 번 등록합니다.** 프로그램을 설치한 폴더(`WE_MEET`)에서 실행하면 브라우저가 열립니다. 계정을 선택하고 권한을 승인하세요.
+
+   ```powershell
+   .\.venv\Scripts\python -m vibescan.register
+   ```
+
+2. **로그인합니다.** 대시보드 왼쪽 아래 **ChatGPT 연결 필요**(또는 **설정**)를 눌러 **ChatGPT로 로그인**을 누릅니다. 터미널에서는 `.\.venv\Scripts\vibescan login`으로도 할 수 있습니다.
+3. **지금 스캔** 옆 화살표(▾)에서 **AI 심층 분석**을 선택해 스캔합니다.
+
+AI 분석을 사용하면 **비밀값과 주석을 지운 코드 일부**가 OpenAI로 전송되고, ChatGPT 구독 사용량이 차감됩니다. 사용량 한도와 앱 연결은 ChatGPT 설정에서 관리할 수 있습니다. AI 분석이 실패해도(사용량 초과, 로그인 만료 등) 로컬 검사 결과는 그대로 남습니다.
+
+## 커밋할 때마다 자동 검사 (선택)
+
+대시보드 **설정 → 자동 감시**에서 **커밋 후 자동 스캔**을 켜면, 그 프로젝트에서 `git commit`할 때마다 백그라운드에서 검사합니다. 커밋은 기다리지 않고 바로 끝나며, 몇 초 뒤 대시보드에 결과가 나타납니다. 새로 생긴 치명·높음 위험이 있으면 화면 배너와 브라우저 알림으로 알려 줍니다.
+
+- 내 PC에서 직접 커밋하는 Git 저장소에서만 사용할 수 있습니다(GitHub 주소·일반 폴더 제외).
+- 프로젝트의 `.git/hooks/post-commit` 파일을 만듭니다. 이미 다른 hook이 있으면 덮어쓰지 않고 직접 추가할 한 줄을 안내합니다.
+- 자동 검사는 기본적으로 ChatGPT를 쓰지 않습니다. **자동 스캔에서 AI 검토**를 켜면 새로 생긴 높음 이상 발견만 분석합니다.
+
+## 터미널에서 사용하기
+
+```powershell
+.\.venv\Scripts\vibescan scan C:\path\to\my-app --offline        # 로컬 검사만
+.\.venv\Scripts\vibescan scan C:\path\to\my-app                  # 로그인되어 있으면 AI 분석 포함
+.\.venv\Scripts\vibescan scan C:\path\to\my-app --output D:\out  # 결과 저장 위치 지정
+.\.venv\Scripts\vibescan dashboard --results D:\out              # 그 결과를 대시보드로 보기
+```
+
+결과 폴더마다 `scan_result.json`(전체 결과)과 `report.md`(한국어 보고서)가 저장됩니다. `vibescan scan`은 Git 저장소 폴더만 받습니다. 일반 폴더와 GitHub 주소는 대시보드에서 연결하세요.
+
+검사에서 빼고 싶은 파일은 프로젝트 최상위에 `.vibescanignore`를 만들어 `.gitignore`와 같은 형식으로 적습니다. `node_modules`, `dist`, `build`, `.venv` 같은 폴더는 자동으로 제외합니다.
+
+## 내 데이터는 어디에 저장되나요
+
+모든 데이터는 아래 폴더에 저장됩니다.
+
+| 운영체제 | 위치 |
+| --- | --- |
+| Windows | `%LOCALAPPDATA%\vibescan` |
+| macOS / Linux | `~/.config/vibescan` |
+
+| 하위 경로 | 내용 |
+| --- | --- |
+| `scans/` | 스캔 결과(근거 코드 포함, 탐지한 비밀값은 앞 4글자만 남기고 가림) |
+| `scan-history.sqlite3` | 프로젝트 연결 목록과 스캔 이력 |
+| `github/` | GitHub 주소로 연결한 프로젝트의 복제본 |
+| `folders/` | 일반 폴더 프로젝트의 스냅샷 기록 |
+| `session.sqlite3`, `registration.sqlite3` | ChatGPT 로그인 정보(Windows는 사용자 계정 암호화로 보호) |
+
+**외부로 나가는 것은 AI 심층 분석을 켰을 때 OpenAI로 보내는 코드 일부뿐입니다.** 이때도 비밀값과 주석은 지운 뒤 보냅니다. 결과 파일과 내려받은 보고서에는 실제 소스 코드가 들어 있으니, 다른 사람에게 보낼 때 주의하세요.
+
+## 업데이트와 삭제
+
+**업데이트** — 설치한 폴더에서 최신 코드를 받습니다. 실행 중인 대시보드는 `Ctrl+C`로 끄고 다시 실행하세요.
+
+```powershell
+git pull
+.\.venv\Scripts\python -m pip install -e .
+```
+
+**삭제** — 아래 두 가지를 지우면 됩니다.
+
+1. 설치한 `WE_MEET` 폴더
+2. 데이터 폴더(`%LOCALAPPDATA%\vibescan` 또는 `~/.config/vibescan`)
+
+자동 감시를 켠 프로젝트가 있다면, 삭제 전에 대시보드에서 끄거나 그 프로젝트의 `.git/hooks/post-commit` 파일을 지우세요.
+
+## 문제 해결
+
+| 증상 | 해결 |
+| --- | --- |
+| `python`을 찾을 수 없음 | Python 설치 시 PATH 추가를 체크했는지 확인하세요. Windows는 `py -3 -m venv .venv`로도 만들 수 있습니다. |
+| "커밋이 있는 로컬 Git 저장소…" 오류 | Git이 설치되어 있는지 확인하세요. Git 저장소라면 커밋이 하나 이상 있어야 합니다. |
+| "Semgrep을 찾을 수 없습니다" | 설치 명령을 다시 실행하세요: `.\.venv\Scripts\python -m pip install -e .` |
+| 대시보드에 예전 화면이 보임 | 실행 중인 대시보드를 `Ctrl+C`로 끄고 다시 실행하세요. |
+| GitHub 비공개 저장소 연결 실패 | 같은 PC에서 `git clone <주소>`가 되는지 먼저 확인하세요. |
+| AI 분석이 안 됨 | 설정의 ChatGPT 상태를 확인하세요. 처음이라면 `python -m vibescan.register`부터 실행해야 합니다. |
+
+## 개발자 정보
+
+```powershell
+.\.venv\Scripts\python -m pip install -e . -r vulnapp/requirements.txt httpx
+.\.venv\Scripts\python -m unittest discover -s tests
+node tests/test_dashboard_ui.cjs
+.\.venv\Scripts\python -m bench.check_rules   # 규칙별 취약/안전 표본 검사
+.\.venv\Scripts\python -m bench.run           # 합성 표본 탐지 벤치마크
+```
 
 | 경로 | 역할 |
 | --- | --- |
-| `vibescan/register.py` | 브라우저를 통한 ChatGPT 클라이언트 최초 등록 |
-| `scanner/models.py` | 발견 한 건을 나타내는 `Finding`, 스캔 전체를 나타내는 `ScanResult`, JSON 직렬화 |
-| `scanner/history.py` | 커밋별 스캔 및 발견 이력을 SQLite에 저장·조회 |
-| [`vulnapp/`](vulnapp/README.md) | 로컬 Flask 샘플 앱과 탐지 기준표 |
-| `tests/` | 엔진과 대시보드가 공유하는 데이터 형식 검증 |
-| `vibescan/dashboard.py`, `vibescan/web/` | 로컬 결과 조회 API와 대시보드 화면 |
+| `vibescan/` | CLI, 대시보드 서버(`dashboard.py`), 로그인·세션, 자동 감시 hook |
+| `vibescan/web/` | 대시보드 화면(HTML·CSS·JS, 번들 폰트) |
+| `scanner/` | 코드 수집, 정적 검사, 시크릿 탐지, 결과 모델, 이력 저장 |
+| `rules/` | VibeScan 전용 Semgrep 규칙과 분류 카탈로그 |
+| `bench/` | 탐지 벤치마크 |
+| [`vulnapp/`](vulnapp/README.md) | 일부러 취약하게 만든 Flask 샘플 앱 |
 
-## 개발 시작
+문서: [기술 문서(데이터 형식·진단 범위)](docs/technical.md) · [진단 로직 보강](docs/diagnosis-plan.md) · [규칙 작성](rules/README.md) · [벤치마크](bench/report.md) · 스프린트 기록 [1](docs/sprint1.md) · [2](docs/sprint2.md) · [3](docs/sprint3.md) · [4](docs/sprint4.md)
 
-Python 3.11 이상에서 저장소 루트에서 실행합니다. 샘플 앱 테스트에는 Flask가 필요합니다.
-
-```sh
-python -m pip install . -r vulnapp/requirements.txt httpx
-python -m unittest discover -s tests -v
-```
-
-`ScanResult.to_json()`은 한국어를 유지한 JSON 문자열을 반환합니다. `mode`는 실행 URL 유무에 따라 `source-only` 또는 `graybox`가 되며, `summary`는 발견 목록에서 심각도별 건수를 계산합니다. `risk_score`는 엔진이 산정해 전달할 0~100점 값입니다.
-
-## 설치 및 수동 진단
-
-Python 3.11 이상과 Git이 필요합니다. 저장소 루트에서 가상환경에 설치합니다.
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python -m pip install .
-.\.venv\Scripts\python -m vibescan.register
-.\.venv\Scripts\vibescan login
-.\.venv\Scripts\vibescan scan ..\vulnapp-repo
-```
-
-이미 클라이언트를 등록한 PC에서는 `login`부터 진행합니다. 샘플을 독립 저장소로 만드는 방법은 [샘플 README](vulnapp/README.md)에 있습니다. macOS·Linux에서는 가상환경의 `bin/vibescan`을 사용합니다.
-
-- 기본 스캔은 HEAD 커밋의 텍스트 파일을 읽습니다. 변경 중인 작업 트리, 링크, 빌드 산출물은 제외합니다. 커밋된 `.env`·개인키·서비스 계정 파일은 내용을 스냅샷에 쓰거나 모델에 보내지 않고 경로·종류·환경변수 이름만 기록합니다. 이미 추적된 민감 파일은 `.gitignore`에 있어도 보고하며, 명시적인 `.vibescanignore` 제외는 존중합니다. `.env.example`/`.env.sample`은 일반 텍스트 검사 대상입니다.
-- 수동 로그인 상태에서는 계정의 모델 목록을 조회하고 정찰·계획과 발견 리뷰를 요청합니다. 비밀값을 가린 주변 코드로 입력·DB·라우트·인증 단서를 분석하고, 5종 점검의 이유·우선순위와 근거를 기록합니다. 모델 검토는 심각도순 최대 30건, 요청당 5건입니다.
-- `vibescan scan <경로> --offline`은 모델 호출을 생략합니다. 미로그인·구독 권한 부족·사용량 초과·모델 응답 오류에서도 정적 결과와 한국어 조치 안내가 남습니다. 파일 파싱 실패는 부분 점검으로 기록하고 나머지 결과를 보존합니다. 규칙·엔진 오류는 실패로 종료합니다.
-- 출력된 실행 폴더의 `scan_result.json`과 `report.md`에 결과가 있습니다. `--output <폴더>`로 저장 위치를 정할 수 있습니다. 기본 위치는 사용자 설정 디렉터리 아래의 `scans/<scan_id>`이며, 메타데이터 이력은 같은 설정 디렉터리의 `scan-history.sqlite3`에 저장합니다.
-- 로그인은 `127.0.0.1`의 임시 포트에서 진행합니다. 세션은 Windows에서 현재 사용자 DPAPI, POSIX에서 사용자 전용 권한으로 보호합니다. 사용량과 앱 권한은 ChatGPT 설정에서 관리할 수 있습니다.
-
-자체 Semgrep 규칙은 Python·JS/TS의 SQL/코드 실행/XSS/파일 접근, Python 업로드·JWT·SSRF, JS JWT·CORS·쿠키·오류 응답, Jinja/Vue/Svelte의 원시 HTML 패턴을 검사합니다. 자체 검사기는 시크릿, Python 설정, Flask/FastAPI/Express 라우트의 관리자 가드·객체 소유자 확인 후보를 보탭니다. 점수는 열린 발견에 Critical 40, High 20, Medium 10, Low 3, Info 0을 합해 최대 100으로 제한합니다. 모델의 오탐 후보 판정과 최초 심각도는 보존합니다.
-
-모델 수정 diff는 문맥·Python 문법을 확인한 **동작 검증 전 제안**이며 자동 적용하지 않습니다. 모델 코드 발췌는 아직 Python만 지원합니다. 인증·인가와 쿠키 검사는 정적 단서만 제공하며 실제 미들웨어·업무 권한·배포 상태는 수동 확인해야 합니다.
-
-## 진단 보강 (Sprint 2.5)
-
-[세부계획과 구현 한계](docs/diagnosis-plan.md) · [규칙 작성·검증](rules/README.md) · [합성 표본 벤치마크](bench/report.md)
-
-발견에 `rule_id`, `fingerprint`, `kisa`가 추가되고 SQLite는 기존 이력을 보존하며 열을 추가합니다. Python 지문은 줄 이동·공백·주석 변화에 독립적입니다. 같은 함수의 동일 코드가 반복된 경우 동일 지문이 될 수 있으며 JS 내부 공백 정규화는 후속 범위입니다. 이 지문으로 직전 스캔과 발견을 비교합니다(아래 ‘커밋별 스캔 이력’).
-
-21개 CI + 4개 V 분류 매핑, 엔드포인트·설정 수집은 검사 범위 판정 등 **내부 처리에만 쓰고 보고서와 대시보드에는 표시하지 않습니다.** 결과 JSON(`kisa_checklist`, `routes`, `config_summary`)에는 남습니다. **CI 분류는 사용자 계획서 기반 초안이며 KISA 원문 대조 미완료**입니다. 연결된 공식 PDF에서 이 CI 체계를 확인하지 못해 중요도·페이지 번호를 비워 두었습니다. KISA 공식 평가나 양호 판정으로 사용하지 마세요.
-
-```sh
-python -m bench.check_rules
-python -m bench.run
-```
-
-벤치마크는 계획서의 35개 패턴을 재구성한 합성 소스와 안전 표본 22개를 사용하며 실행하지 않습니다. CI는 탐지 34/35 미만 또는 안전 표본 오탐 발생 시 실패합니다. 미탐인 의존성 검사, 추가 LLM 설계, Django/Next.js 라우트·BaaS 정책·동적 검사는 후속 단계입니다.
-
-[단계별 구현 계획과 검증 기준](docs/sprint1.md)
-
-## 로컬 대시보드 (Sprint 4)
-
-설치 후 `vibescan` 또는 `python -m vibescan`을 실행하면 기본 브라우저에 대시보드가 열립니다.
-
-```powershell
-.\.venv\Scripts\python -m vibescan
-# 별도 폴더에 저장한 결과 열기
-.\.venv\Scripts\python -m vibescan dashboard --results "C:\path\to\scan-output"
-```
-
-사이드바의 프로젝트를 선택하면 해당 프로젝트의 결과와 스캔 기록만 표시됩니다. 연결된 프로젝트와 CLI 결과만 있는 프로젝트를 함께 표시하며, 결과만 있는 프로젝트는 먼저 연결해야 스캔할 수 있습니다. 프로젝트 옆 숫자는 최신 위험 점수이고, 상태 점은 자동 감시 여부입니다.
-
-1. **+ 프로젝트 추가**에서 로컬 Git 저장소 루트, 일반 프로젝트 폴더 또는 GitHub 주소를 연결합니다.
-2. **지금 스캔**의 기본은 빠른 로컬 검사입니다. 옆 화살표에서 **AI 심층 분석**을 선택할 수 있습니다. 마지막 모드를 기억하며, AI 모드는 ChatGPT 연결이 필요합니다.
-3. 열린 발견 중 최고 심각도로 **심각 / 위험 / 주의 / 낮음 / 발견 없음**을 표시합니다. 점수는 보조 지표이며 안전 보증이 아닙니다. 최근 8회 추이와 직전 결과 대비 새 위험·해결 건수를 함께 확인합니다.
-4. 심각도 칩(다중 선택), 상태 탭, 파일·제목·CWE 검색으로 발견을 좁힙니다. 발견을 누르면 오른쪽 드로어에서 문제, 근거 코드, 수정 방법과 수정안을 확인합니다. 수정안은 자동 적용하지 않습니다.
-5. **보고서**로 현재 스캔의 한국어 Markdown 보고서를 다운로드합니다. 새 결과는 자동으로 갱신하며, 오류일 때만 **다시 시도**가 표시됩니다.
-
-**설정**에는 ChatGPT 계정, 선택한 프로젝트의 커밋 후 자동 스캔, 자동 AI 검토, 테마, 결과 폴더와 CLI 안내가 있습니다. 자동 스캔을 켤 때 알림 권한을 요청하며, 새로운 치명·높음 위험만 알립니다. 자동 AI 검토는 기존 API와 같이 전체 프로젝트 공통 설정으로, 새로운 치명·높음 발견에만 사용됩니다. AI 분석은 비밀값을 가린 코드 일부를 전송하고 ChatGPT 구독 사용량을 차감합니다. 사용량·앱 권한은 ChatGPT 설정에서 관리하세요. 사용량 초과·로그인 만료 등으로 AI 분석이 실패해도 저장된 정적 결과와 실패 이유를 확인할 수 있습니다.
-
-Git 저장소는 현재 HEAD를 검사하므로 미커밋 변경은 제외합니다. 일반 폴더는 원본을 바꾸지 않고 설정 폴더의 별도 Git 기록에 스냅샷을 만듭니다. GitHub 주소는 설정 폴더에 복제하고 스캔 전 최신 커밋을 가져오며, 비공개 저장소에는 PC의 기존 Git 인증을 사용합니다. GitHub 복제·일반 폴더 스냅샷은 이 PC에서 직접 커밋하지 않으므로 자동 감시를 지원하지 않습니다. 한 번에 하나의 스캔만 실행하며 실패해도 이전 결과는 유지합니다.
-
-데스크톱 전용(최소 1280px)이며 좁은 창에서는 가로 스크롤을 사용합니다. 테마는 기본적으로 OS 설정을 따르고 **시스템 / 라이트 / 다크**로 변경할 수 있습니다. Pretendard 가변 폰트와 OFL 라이선스를 패키지에 포함하므로 화면 표시에는 외부 CDN이 필요 없습니다. `/` 검색, `j/k` 목록 이동, 상세의 `↑/↓` 이전·다음, `Esc` 닫기를 지원합니다.
-
-기본 결과 폴더는 사용자 설정 디렉터리의 `scans`입니다. 손상되거나 16 MiB를 넘는 결과는 제외 안내하고, 검사 범위가 없는 과거 결과는 미확인으로 표시합니다. 출력 파일을 옮기거나 삭제하면 SQLite 메타데이터만으로 상세 내용을 복구하지 못합니다.
-
-대시보드는 `127.0.0.1` 임시 포트에서 실행하며 종료는 터미널의 `Ctrl+C`입니다. 접속 주소는 결과 열람 권한을 포함하므로 공유하지 마세요. 접속 토큰은 URL hash로 전달하고 프로젝트·테마 상태에는 hash를 사용하지 않습니다.
-
-[구현 및 검증](docs/sprint4.md) · [이전 Sprint 2](docs/sprint2.md) · [Sprint 3](docs/sprint3.md)
-
-## 커밋별 스캔 이력
-
-엔진은 `ScanResult`에 `branch`, `commit`, `scan_type`(full/diff), `trigger`(manual/git-hook/watcher)를 지정합니다. 변경분 스캔에는 `baseline_commit`도 필요하며, 전체 스캔에서는 비교에 쓴 직전 스캔의 커밋입니다. 각 발견의 `change`는 new/existing/fixed, `introduced_in`은 처음 발견된 커밋입니다. 변화가 판정되지 않은 과거 결과에서는 두 필드가 `null`입니다. `delta`는 명시된 new/fixed 건수를 세고, 심각도 요약에서는 이번 비교에서 해결된 발견을 제외합니다. 스캔할 때마다 같은 레포의 가장 최근 결과와 발견 지문을 맞춰 new/existing/fixed를 정하고, 사라진 발견은 `fixed` 항목으로 결과에 남깁니다. 이번에 파싱하지 못한 파일의 이전 발견은 해결로 보지 않고 `existing`으로 유지합니다.
-
-기존 형식 또는 v6 형식의 `scan_result.json`을 다음처럼 이력에 추가할 수 있습니다.
-
-```python
-from pathlib import Path
-from scanner.history import list_scans, save_scan
-from scanner.models import ScanResult
-
-result = ScanResult.from_json(Path("scan_result.json").read_text(encoding="utf-8"))
-database = Path("scan-history.sqlite3")
-save_scan(database, result)
-print(list_scans(database, result.target.source))
-```
-
-이력의 단위는 `scan_id`입니다. 같은 커밋을 다시 스캔하면 별도의 ID를 사용합니다. 중복 ID는 저장 오류로 처리하고 기존 기록을 유지합니다. SQLite에는 커밋·점수·변화 건수와 발견별 분류·위치를 저장합니다. 근거 코드, 수정 diff, 보고서 본문은 입력 JSON에만 있습니다.
-
-## ChatGPT 클라이언트 최초 등록
-
-저장소 루트에서 다음 명령을 실행한 뒤 기본 브라우저에서 계정과 워크스페이스를 선택하고 권한 요청을 검토합니다.
-
-```sh
-python -m vibescan.register
-```
-
-명령은 `127.0.0.1`의 임시 포트에서 최대 5분간 응답을 기다립니다. 승인하면 설치 식별자와 발급된 클라이언트 ID가 Windows의 `%LOCALAPPDATA%/vibescan`, 그 밖의 환경의 `$XDG_CONFIG_HOME/vibescan`(기본 `~/.config/vibescan`)에 저장됩니다. 같은 설치에서 다시 실행하면 기존 등록을 확인합니다. 등록 후 아래의 로그인 명령으로 같은 계정에 연결합니다. [OpenAI 등록 문서](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)
-
-## v6 기반 작업 진행 상황
-
-- [x] ChatGPT 클라이언트 등록 명령 구현 및 콜백 처리 테스트
-- [x] 실제 설치에서 ChatGPT 클라이언트 등록 완료 (사용자 확인)
-- [x] 저장소 구조 및 기본 Finding / ScanResult 데이터 모델
-- [x] 커밋·기준 커밋·발견 변화량 필드 및 SQLite 스캔 이력 스키마
-- [x] 로컬 Flask 샘플 앱 구성
-- [x] Semgrep 실행 및 JSON 결과 파싱 확인 ([원본 결과](tests/fixtures/semgrep-sample.json) · [실행 기록](https://github.com/jubin0615/WE_MEET/actions/runs/44067063217))
-
+Pretendard 폰트는 [SIL Open Font License](vibescan/web/fonts/OFL.txt)를 따릅니다.
