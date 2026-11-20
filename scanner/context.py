@@ -40,10 +40,21 @@ def sanitize(source, known=()):
             value = node.value
             if id(node) in sensitive or KEY.search(value):
                 hidden.add(value)
+        if isinstance(node, ast.JoinedStr):
+            # A key split across f-string pieces ("sk-live-{'…'}") is only recognisable once joined.
+            joined = "".join(part.value for part in ast.walk(node)
+                             if isinstance(part, ast.Constant) and isinstance(part.value, str))
+            if KEY.search(joined):
+                hidden.add(joined)
+    # Pieces inside an f-string cannot be replaced on their own without breaking its quoting,
+    # so an f-string is judged on all of its text and redacted as a whole.
+    inside_fstring = {id(child) for node in ast.walk(tree) if isinstance(node, ast.JoinedStr)
+                      for child in ast.walk(node) if child is not node}
     for node in ast.walk(tree):
-        if not isinstance(node, (ast.Constant, ast.JoinedStr)):
+        if not isinstance(node, (ast.Constant, ast.JoinedStr)) or id(node) in inside_fstring:
             continue
-        value = node.value if isinstance(node, ast.Constant) else None
+        value = node.value if isinstance(node, ast.Constant) else "".join(
+            part.value for part in ast.walk(node) if isinstance(part, ast.Constant) and isinstance(part.value, str))
         if id(node) in sensitive or id(node) in docs or (isinstance(value, str) and any(
                 secret and (value == secret or len(secret) >= 4 and secret in value) for secret in hidden)):
             if isinstance(value, str) or isinstance(node, ast.JoinedStr):
@@ -96,8 +107,14 @@ class Context:
             if not source:
                 self.omitted += 1
                 continue
+            try:
+                tree = ast.parse(source)
+            except SyntaxError:
+                # A redaction that breaks the file keeps it out of model context instead of failing the scan.
+                self.omitted += 1
+                continue
             self.sources[name] = source
-            self.trees[name] = ast.parse(source)
+            self.trees[name] = tree
             for node in ast.walk(self.trees[name]):
                 kind = None
                 if isinstance(node, (ast.Import, ast.ImportFrom)):

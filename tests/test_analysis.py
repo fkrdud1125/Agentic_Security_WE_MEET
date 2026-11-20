@@ -221,3 +221,28 @@ token2 = f"prefix-secret-{설명}"
         diff = context.proposed_diff("end.py", context.excerpt("end.py", 2),
                                      "def render_note(title):\n    from html import escape\n    return escape(title)\n")
         self.assertIn("-    return title\n\\ No newline at end of file\n", diff)
+
+
+class FStringRedactionTests(unittest.TestCase):
+    def test_fstrings_stay_valid_and_secrets_inside_them_are_hidden(self):
+        # Seen in a public repo: a short candidate ("code") from another file matched inside f-string text.
+        source = ('def prompt(question, previous_code):\n'
+                  '    head = f"question:\\n{question.strip()}\\n"\n'
+                  '    tail = f"previous_code:\\n{previous_code}\\n"\n'
+                  '    return head + tail\n'
+                  'HEADER = f"Bearer sk-live-{\'a1B2c3D4e5F6g7H8i9J0\'}"\n')
+        out, _ = sanitize(source, {"code"})
+        ast.parse(out)  # still valid Python
+        self.assertIn('f"question:\\n{question.strip()}\\n"', out)  # only the matching f-string is replaced
+        self.assertNotIn("previous_code:", out)
+        self.assertNotIn("a1B2c3D4e5F6g7H8i9J0", out)  # a key split across f-string pieces
+
+    def test_a_file_whose_redaction_breaks_is_left_out_instead_of_failing(self):
+        with TemporaryDirectory() as temp:
+            (Path(temp) / "ok.py").write_text("x = 1\n")
+            (Path(temp) / "bad.py").write_text("y = 2\n")
+            real = sanitize
+            broken = lambda src, known=(): ("y = (\n", set()) if src.startswith("y") else real(src, known)
+            with patch("scanner.context.sanitize", side_effect=broken):
+                context = Context(Path(temp), ["ok.py", "bad.py"])
+        self.assertEqual((list(context.sources), context.omitted), (["ok.py"], 1))
