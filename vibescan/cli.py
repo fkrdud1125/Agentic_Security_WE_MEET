@@ -94,6 +94,8 @@ class ScanInputError(ValueError):
     """A scan the user can fix; its message is safe to show in the dashboard."""
 
 
+# Languages whose files are collected but have no vulnerability rules: only credential checks run on them.
+UNSUPPORTED = {"php": "PHP", "rb": "Ruby", "go": "Go", "java": "Java", "kt": "Kotlin"}
 STAGES = ["코드 수집", "정찰", "점검 계획", "정적 검사", "검토·보고서"]
 
 
@@ -124,6 +126,12 @@ def scan(repo, output, directory, offline=False, trigger=Trigger.MANUAL, progres
         progress(1, f"정찰 완료 · {app.framework or '프레임워크 미확인'} · 라우트 {app.routes}개")
         context = Context(source, files)
         app.limitations = ["Python·JS/TS·템플릿의 제한된 정적 규칙 검사입니다. 함수 간 흐름과 동적 검사는 확인하지 않았습니다."]
+        counts = languages(files)
+        others = {UNSUPPORTED[k]: n for k, n in counts.items() if k in UNSUPPORTED}
+        mostly_unsupported = sum(others.values()) > sum(counts.get(k, 0) for k in ("python", "javascript", "typescript"))
+        if others:
+            names = ", ".join(f"{label} {n}개" for label, n in others.items())
+            app.limitations.insert(0, f"탐지 규칙이 없는 언어의 파일({names})은 인증정보 노출만 확인했고 다른 취약점은 검사하지 않았습니다.")
         progress(2, "기본 점검 계획 사용" if offline or new_high_only else "ChatGPT에 점검 계획 요청 중")
         if not offline:
             try:
@@ -173,6 +181,8 @@ def scan(repo, output, directory, offline=False, trigger=Trigger.MANUAL, progres
 
     weights = {Severity.CRITICAL: 40, Severity.HIGH: 20, Severity.MEDIUM: 10,
                Severity.LOW: 3, Severity.INFO: 0}
+    if mostly_unsupported:
+        note += f" · 주 언어({', '.join(others)})의 탐지 규칙이 없어 결과가 불완전합니다"
     progress(4, "보고서 저장 중")
     current = list(findings) + kept
     for number, f in enumerate(kept + gone, len(findings) + 1):

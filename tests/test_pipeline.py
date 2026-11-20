@@ -185,7 +185,7 @@ class PipelineTests(unittest.TestCase):
         out, state = self.base / "out", self.base / "state"
         with patch("scanner.static.semgrep", return_value=[]):
             cli.scan(self.repo, out, state, offline=True)
-            (self.repo / "app.py").write_text('API_TOKEN = "private-value-1234"\nSECOND_KEY = "private-value-5678"\n')
+            (self.repo / "app.py").write_text('API_TOKEN = "private-value-1234"\nSECOND_KEY = "private-value-Xq7Lm2Pz9Wr4"\n')
             self.git("add", "app.py")
             self.git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false",
                      "commit", "-qm", "second secret")

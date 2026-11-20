@@ -166,3 +166,32 @@ app.get('/orders/:id', (req,res) => { res.json(db.findById(req.params.id)); });'
         finding = normalize([RawHit('secrets','key','a.py',1,'CWE-798',['CI-05'],'key','rotate')])[0]
         finding.status = Status.DISMISSED
         self.assertEqual(next(r for r in checklist([finding], {'python': 1}, []) if r['code']=='CI-05')['findings'], [])
+
+    def test_identifier_slugs_and_sample_files_do_not_inflate_secret_findings(self):
+        found = lambda name, text: [(h.line, h.severity.value) for h in secrets.detect(name, text)]
+        # Seen in a real PHP/JSON site: identifiers named "key" are not credentials.
+        self.assertEqual(found("data/content.json", '{"key": "family-lounge-guide", "feature_key": "esg-strategy-2026"}'), [])
+        self.assertEqual(found("app.py", 'FEATURE_KEY = "news-publication-01"\n'), [])
+        # A slug still counts when the line names a real credential.
+        self.assertEqual(found("app.py", 'admin_password = "admin-pass-1234"\n'), [(1, "High")])
+        # Throwaway test values stay visible as Info; a vendor-format key is a leak even in tests.
+        self.assertEqual(found("tests/login_test.py", 'PASSWORD = "LabDemo1234!"\n'), [(1, "Info")])
+        self.assertEqual(found("tests/login_test.py", 'STRIPE = "sk_live_' + "a1B2c3D4e5F6g7H8" + '"\n'), [(1, "High")])
+        self.assertEqual(found("tests/login_test.py", 'API_KEY = "sk_live_' + "a1B2c3D4e5F6g7H8" + '"\n'), [(1, "High")])
+
+    def test_unsupported_main_language_is_reported_as_incomplete(self):
+        repo = self.root / 'php-site'
+        repo.mkdir()
+        for i in range(3):
+            (repo / f'page{i}.php').write_text('<?php echo $_GET["q"]; ?>\n')
+        (repo / 'tool.py').write_text('print(1)\n')
+        subprocess.run(['git', '-C', str(repo), 'init', '-q'], check=True)
+        subprocess.run(['git', '-C', str(repo), 'add', '.'], check=True)
+        subprocess.run(['git', '-C', str(repo), '-c', 'user.name=T', '-c', 'user.email=t@e.invalid', '-c',
+                        'commit.gpgsign=false', 'commit', '-qm', 'php'], check=True)
+        with patch('scanner.static.semgrep', return_value=[]):
+            folder, note, _ = scan(repo, self.root / 'out', self.root / 'state', offline=True)
+        self.assertIn('주 언어(PHP)', note)
+        result = ScanResult.from_json((folder / 'scan_result.json').read_text(encoding='utf-8'))
+        self.assertIn('PHP 3개', result.profile.limitations[0])
+        self.assertIn('결과가 불완전', result.report_md)

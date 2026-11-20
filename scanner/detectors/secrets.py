@@ -17,6 +17,12 @@ SENSITIVE = re.compile(r"api.?key|secret|password|token|credential|authorization
 ASSIGNMENT = re.compile(r'''["']?([\w.-]+)["']?\s*[:=]\s*["']([^"'\r\n]*)["']''')
 PLACEHOLDER = re.compile(r"^(?:your[-_ ].*|x{3,}|example|test|dummy|changeme|placeholder|<.*>|\$\{.*\})$", re.I)
 SIGNING = re.compile(r"secret_key|jwt_secret|session_secret", re.I)
+# A lowercase slug ("family-lounge", "esg_strategy") is an identifier unless the line names a real credential.
+SLUG = re.compile(r"[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)+")
+STRONG = re.compile(r"pass(?:word|wd)?|pwd|secret|token|credential|api.?key|private.?key|auth", re.I)
+# Tests, examples and seed data hold throwaway values; they stay visible but do not raise the risk score.
+SAMPLE_PATH = re.compile(r"(?:^|/)(?:tests?|__tests__|specs?|fixtures?|seeds?|examples?|samples?|mocks?|__mocks__)/"
+                         r"|(?:^|/)(?:test_[^/]*|[^/]*_test\.py|[^/]*\.(?:test|spec)\.[jt]sx?)$", re.I)
 
 
 def hidden_values(source):
@@ -36,25 +42,37 @@ def service_role(value):
 
 def detect(name, content):
     hits = {}
-    def add(line, value, signing=False):
+    lines = content.splitlines()
+    sample = bool(SAMPLE_PATH.search(name))
+
+    def add(line, value, signing=False, known=False):
+        """known: the value has a vendor key format (sk-live…, AKIA…), which is a leak wherever it sits."""
         if not value or (PLACEHOLDER.fullmatch(value) and not signing):
             return
         if not signing and len(value) < 8:
+            return
+        if not (known or signing) and SLUG.fullmatch(value) and not STRONG.search(lines[line - 1]):
             return
         weak = signing and len(value) < 32
         rule = 'weak-signing-key' if weak else 'literal-token'
         codes = ['CI-16'] if weak else ['CI-05']
         title = '약한 고정 서명키' if weak else '소스에 포함된 인증정보 후보'
         critical = service_role(value)
+        severity = Severity.CRITICAL if critical else Severity.HIGH
         if critical:
             codes += ['V-04']; title = '권한이 높은 service_role 키 노출'
+        elif sample and not known:
+            severity, title = Severity.INFO, '테스트·예제 파일의 인증정보 후보'
+        previous = hits.get((line, rule))
+        if previous and list(Severity).index(previous.severity) <= list(Severity).index(severity):
+            return  # keep the stronger reading of the same line
         hits[(line, rule)] = RawHit('secrets', rule, name, line, 'CWE-321' if weak else 'CWE-798',
             codes, title, '노출된 키를 교체하고 서버 환경변수 또는 비밀 저장소에서 읽으세요. 서명키는 충분한 난수를 사용하세요.',
-            Severity.CRITICAL if critical else Severity.HIGH, evidence='[인증정보 값 가림]',
+            severity, evidence='[인증정보 값 가림]',
             identity=code_identity(content, line, name.endswith('.py')))
     for line, text in enumerate(content.splitlines(), 1):
         for match in KEY.finditer(text):
-            add(line, match.group())
+            add(line, match.group(), known=True)
         for match in ASSIGNMENT.finditer(text):
             if SENSITIVE.search(match.group(1)):
                 add(line, match.group(2), bool(SIGNING.search(match.group(1))))
