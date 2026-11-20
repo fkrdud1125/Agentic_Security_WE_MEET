@@ -131,7 +131,9 @@ async function main() {
   await chip("Medium").click(); assert.equal(get("findings").children.length, 2);
   get("search").value = "CWE-89"; run("filterFindings()"); assert.equal(get("findings").children.length, 2);
   get("search").value = "missing"; run("filterFindings()"); assert.equal(get("no-findings").hidden, false);
-  await get("reset-empty").click(); assert.equal(get("findings").children.length, 3);
+  assert.equal(get("no-findings-title").textContent, "조건에 맞는 발견이 없습니다");
+  get("search").value = ""; run("filterFindings()"); assert.equal(get("findings").children.length, 2);  // chips stay
+  run("resetFilters()"); assert.equal(get("findings").children.length, 3);  // what a project switch does
   await get("risk-alert").click(); assert.equal(get("findings").children.length, 1);
   assert.equal(get("new-filter").hidden, false);
   await get("new-filter").click(); assert.equal(get("findings").children.length, 3);

@@ -46,10 +46,10 @@
       </section>
       <section class="findings-panel" aria-labelledby="findings-title">
         <div class="findings-heading"><h2 id="findings-title">발견 <span id="filtered-count"></span></h2><label class="search"><span class="sr-only">파일·제목·CWE 검색</span><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="파일, 제목, CWE 검색" autocomplete="off"><kbd>/</kbd></label></div>
-        <div class="filter-line"><div id="status-tabs" class="tabs" role="tablist" aria-label="발견 상태"></div><button id="new-filter" class="filter-chip" type="button" aria-pressed="false" hidden>새로 발견 ×</button><button id="clear-filters" class="ghost" type="button" hidden>필터 초기화</button></div>
+        <div class="filter-line"><div id="status-tabs" class="tabs" role="tablist" aria-label="발견 상태"></div><button id="new-filter" class="filter-chip" type="button" aria-pressed="false" hidden>새로 발견 ×</button></div>
         <div class="list-heading" aria-hidden="true"><span>심각도</span><span>발견 내용</span><span>파일 위치</span><span></span></div>
         <div id="findings" role="tabpanel" aria-label="발견 목록"></div>
-        <div id="no-findings" class="no-findings" hidden><span aria-hidden="true">◎</span><h3>조건에 맞는 발견이 없습니다</h3><p>필터를 바꾸거나 검사 범위의 미검사 항목을 확인하세요.</p><button id="reset-empty" class="secondary" type="button">필터 초기화</button></div>
+        <div id="no-findings" class="no-findings" hidden><span aria-hidden="true">◎</span><h3 id="no-findings-title">열린 발견이 없습니다</h3><p id="no-findings-hint"></p></div>
         <div class="list-footer"><span>근거를 확인한 뒤 수정을 결정하세요.</span><span>발견 선택 <kbd>↵</kbd> · 이전 / 다음 <kbd>↑</kbd><kbd>↓</kbd></span></div>
       </section>
     </div>

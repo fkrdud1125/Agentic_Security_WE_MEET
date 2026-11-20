@@ -298,7 +298,11 @@ function filterFindings() {
   $("filtered-count").textContent = String(visibleFindings.length).padStart(2, "0");
   $("no-findings").hidden = visibleFindings.length !== 0;
   $("new-filter").hidden = !newOnly; $("new-filter").setAttribute("aria-pressed", String(newOnly));
-  $("clear-filters").hidden = !severityFilter.size && !newOnly && !query && statusFilter === "open";
+  const narrowed = severityFilter.size || newOnly || query;
+  $("no-findings-title").textContent = narrowed ? "조건에 맞는 발견이 없습니다"
+    : statusFilter === "open" ? "열린 발견이 없습니다" : "이 상태의 발견이 없습니다";
+  $("no-findings-hint").textContent = narrowed ? "심각도 선택을 해제하거나 검색어를 지워 보세요."
+    : "적용한 규칙에서 찾은 항목이 없다는 뜻이며, 안전을 보증하지는 않습니다.";
   $("findings").replaceChildren(...visibleFindings.map(f => {
     const row = node("button", "", "finding-row " + (levels.includes(f.severity) ? f.severity : "Info"));
     row.type = "button"; row.dataset.findingId = f.id;
@@ -572,7 +576,6 @@ $("risk-alert").addEventListener("click", () => {
   $("findings").querySelector("button")?.focus();
 });
 $("new-filter").addEventListener("click", () => { newOnly = false; filterFindings(); });
-for (const id of ["clear-filters", "reset-empty"]) $(id).addEventListener("click", resetFilters);
 $("dismiss-toast").addEventListener("click", () => { $("toast").hidden = true; });
 $("retry").addEventListener("click", () => { const action = retryAction; message(""); if (action) action(); });
 $("login").addEventListener("click", async () => {
