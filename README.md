@@ -11,11 +11,21 @@ AI 도구로 빠르게 만든 웹앱에는 소스에 박힌 API 키, SQL 인젝�
 
 > VibeScan의 결과는 정적 분석으로 찾은 **후보**입니다. 안전을 보증하지 않으며, 실제 수정 전에는 코드를 직접 확인하세요.
 
+## 대시보드 실행
+
+처음 사용하는 PC에서는 아래 [설치](#설치)를 한 번 진행하세요. 설치 후에는 Windows, macOS, Linux 모두 **어느 폴더에서든** 터미널에 다음 한 단어를 입력하면 기본 브라우저에서 대시보드가 열립니다.
+
+```sh
+vibescan
+```
+
+대시보드를 사용하는 동안 터미널을 열어 두세요. 종료하려면 `Ctrl+C`를 누르세요. 터미널에 표시된 접속 주소에는 열람 권한이 포함되어 있습니다.
+
 ## 준비물
 
 | 필요한 것 | 확인 명령 | 비고 |
 | --- | --- | --- |
-| Python 3.11 이상 | `python --version` | [python.org](https://www.python.org/downloads/)에서 설치. Windows는 설치 화면에서 **Add python.exe to PATH**를 체크하세요. |
+| Python 3.11 이상 | Windows `python --version`, macOS·Linux `python3 --version` | [python.org](https://www.python.org/downloads/)에서 설치. Windows는 설치 화면에서 **Add python.exe to PATH**를 체크하세요. |
 | Git | `git --version` | [git-scm.com](https://git-scm.com/downloads)에서 설치 |
 | ChatGPT Plus/Pro 구독 | — | **선택 사항.** AI 심층 분석을 쓸 때만 필요합니다. |
 
@@ -23,41 +33,42 @@ AI 도구로 빠르게 만든 웹앱에는 소스에 박힌 API 키, SQL 인젝�
 
 ## 설치
 
-처음 한 번만 하면 됩니다.
+먼저 저장소를 받고 설치 폴더로 이동합니다.
+
+```sh
+git clone https://github.com/jubin0615/WE_MEET.git
+cd WE_MEET
+```
 
 **Windows (PowerShell)**
 
 ```powershell
-git clone https://github.com/jubin0615/WE_MEET.git
-cd WE_MEET
 python -m venv .venv
 .\.venv\Scripts\python -m pip install -e .
+
+$bin = Join-Path $env:USERPROFILE '.local\bin'
+New-Item -ItemType Directory -Force $bin | Out-Null
+Copy-Item .\.venv\Scripts\vibescan.exe $bin
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+if ($bin -notin ($userPath -split ';')) {
+    [Environment]::SetEnvironmentVariable('Path', "$bin;$userPath", 'User')
+}
+$env:Path = "$bin;$env:Path"
 ```
 
-**macOS / Linux**
+**macOS (zsh) · Linux (bash)**
 
 ```sh
-git clone https://github.com/jubin0615/WE_MEET.git
-cd WE_MEET
 python3 -m venv .venv
 .venv/bin/python -m pip install -e .
+mkdir -p "$HOME/.local/bin"
+ln -s "$PWD/.venv/bin/vibescan" "$HOME/.local/bin/vibescan"
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
-`.venv`는 VibeScan 전용 가상환경이라 PC의 다른 Python 프로그램에 영향을 주지 않습니다. 설치에는 1~2분이 걸립니다.
+새 터미널에서도 명령을 찾을 수 있도록 위의 `export PATH` 한 줄을 macOS에서는 `~/.zshrc`에, Linux의 bash에서는 `~/.bashrc`에 한 번 추가하세요. 실행 명령이 가상환경을 사용하므로 설치한 `WE_MEET` 폴더는 그 위치에 두세요.
 
-## 실행하기
-
-```powershell
-.\.venv\Scripts\vibescan          # Windows
-```
-
-```sh
-.venv/bin/vibescan                # macOS / Linux
-```
-
-기본 브라우저에 대시보드가 열립니다. 종료하려면 실행한 터미널에서 `Ctrl+C`를 누르세요. 터미널에 표시되는 접속 주소에는 열람 권한이 들어 있으니 다른 사람과 공유하지 마세요.
-
-### 처음 검사해 보기
+## 처음 검사해 보기
 
 1. 상단의 **+ 프로젝트 추가**를 누르고, 검사할 프로젝트를 입력합니다.
    - 내 PC의 프로젝트 폴더: `C:\Users\me\projects\my-app`
@@ -89,7 +100,7 @@ ChatGPT Plus/Pro 구독이 있으면 VibeScan이 내 코드 문맥을 보고 오
    .\.venv\Scripts\python -m vibescan.register
    ```
 
-2. **로그인합니다.** 대시보드 상단의 **ChatGPT 연결 필요**(또는 **설정**)를 눌러 **ChatGPT로 로그인**을 누릅니다. 터미널에서는 `.\.venv\Scripts\vibescan login`으로도 할 수 있습니다.
+2. **로그인합니다.** 대시보드 상단의 **ChatGPT 연결 필요**(또는 **설정**)를 눌러 **ChatGPT로 로그인**을 누릅니다. 터미널에서는 `vibescan login`으로도 할 수 있습니다.
 3. **지금 스캔** 옆 화살표(▾)에서 **AI 심층 분석**을 선택해 스캔합니다.
 
 AI 분석을 사용하면 **비밀값과 주석을 지운 코드 일부**가 OpenAI로 전송되고, ChatGPT 구독 사용량이 차감됩니다. 사용량 한도와 앱 연결은 ChatGPT 설정에서 관리할 수 있습니다. AI 분석이 실패해도(사용량 초과, 로그인 만료 등) 로컬 검사 결과는 그대로 남습니다.
@@ -105,10 +116,10 @@ AI 분석을 사용하면 **비밀값과 주석을 지운 코드 일부**가 Ope
 ## 터미널에서 사용하기
 
 ```powershell
-.\.venv\Scripts\vibescan scan C:\path\to\my-app --offline        # 로컬 검사만
-.\.venv\Scripts\vibescan scan C:\path\to\my-app                  # 로그인되어 있으면 AI 분석 포함
-.\.venv\Scripts\vibescan scan C:\path\to\my-app --output D:\out  # 결과 저장 위치 지정
-.\.venv\Scripts\vibescan dashboard --results D:\out              # 그 결과를 대시보드로 보기
+vibescan scan C:\path\to\my-app --offline        # 로컬 검사만
+vibescan scan C:\path\to\my-app                  # 로그인되어 있으면 AI 분석 포함
+vibescan scan C:\path\to\my-app --output D:\out  # 결과 저장 위치 지정
+vibescan dashboard --results D:\out              # 그 결과를 대시보드로 보기
 ```
 
 결과 폴더마다 `scan_result.json`(전체 결과)과 `report.md`(한국어 보고서)가 저장됩니다. `vibescan scan`은 Git 저장소 폴더만 받습니다. 일반 폴더와 GitHub 주소는 대시보드에서 연결하세요.
@@ -138,12 +149,16 @@ AI 분석을 사용하면 **비밀값과 주석을 지운 코드 일부**가 Ope
 
 **업데이트** — 설치한 폴더에서 최신 코드를 받습니다. 실행 중인 대시보드는 `Ctrl+C`로 끄고 다시 실행하세요.
 
+macOS와 Linux에서는 `WE_MEET` 폴더에서 `git pull` 후 `.venv/bin/python -m pip install -e .`을 실행합니다. 다음 실행부터 기존 `vibescan` 명령에 업데이트가 적용됩니다. Windows에서는 아래 명령을 사용합니다.
+
 ```powershell
 git pull
 .\.venv\Scripts\python -m pip install -e .
 ```
 
 **삭제** — 아래 두 가지를 지우면 됩니다.
+
+설치할 때 등록한 실행 명령도 제거하세요. Windows에서는 `%USERPROFILE%\.local\bin\vibescan.exe`를 삭제하고, macOS와 Linux에서는 `unlink "$HOME/.local/bin/vibescan"`을 실행합니다.
 
 1. 설치한 `WE_MEET` 폴더
 2. 데이터 폴더(`%LOCALAPPDATA%\vibescan` 또는 `~/.config/vibescan`)
@@ -154,6 +169,7 @@ git pull
 
 | 증상 | 해결 |
 | --- | --- |
+| `vibescan`을 찾을 수 없음 | 설치 단계의 사용자 명령 폴더가 `PATH`에 있는지 확인하세요. Windows는 새 터미널에서 `Get-Command vibescan`, macOS·Linux는 `command -v vibescan`으로 등록 위치를 확인할 수 있습니다. |
 | `python`을 찾을 수 없음 | Python 설치 시 PATH 추가를 체크했는지 확인하세요. Windows는 `py -3 -m venv .venv`로도 만들 수 있습니다. |
 | "커밋이 있는 로컬 Git 저장소…" 오류 | Git이 설치되어 있는지 확인하세요. Git 저장소라면 커밋이 하나 이상 있어야 합니다. |
 | "Semgrep을 찾을 수 없습니다" | 설치 명령을 다시 실행하세요: `.\.venv\Scripts\python -m pip install -e .` |
