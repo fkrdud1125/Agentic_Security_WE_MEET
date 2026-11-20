@@ -457,11 +457,20 @@ class DashboardTests(unittest.TestCase):
         source = self.root.parent / "바탕 화면" / "friend-site"  # non-ASCII path, read back from Git config
         source.mkdir(parents=True)
         (source / "app.py").write_text('API_TOKEN = "test-credential-Ab3Cd5Ef7G"\n')
+        (source / ".vibescanignore").write_text("private/\n")
+        (source / "private").mkdir()
+        (source / "private" / "notes.py").write_text('password = "excluded-Aud1t-Value"')
+        (source / ".env").write_text("AUDIT_KEY=local-audit-marker\n")
         before = sorted(p.name for p in source.rglob("*"))
         response = self.client.post("/api/repos", headers=self.headers, json={"path": str(source)})
         self.assertEqual(response.status_code, 200, response.text)
         repo = response.json()["path"]
         self.assertTrue(Path(repo).is_relative_to(self.directory.resolve() / "folders"))
+        def assert_empty_history():
+            objects = subprocess.check_output(["git", "-C", repo, "cat-file", "--batch-all-objects",
+                                               "--batch-check=%(objecttype)"]).splitlines()
+            self.assertNotIn(b"blob", objects)
+        assert_empty_history()
         self.assertEqual(sorted(p.name for p in source.rglob("*")), before)  # no .git or index written there
         again = self.client.post("/api/repos", headers=self.headers, json={"path": str(source)})
         self.assertEqual(again.json()["path"], repo)
@@ -476,6 +485,10 @@ class DashboardTests(unittest.TestCase):
                 self.assertEqual(job["state"], "completed", job)
             token.assert_not_called()
         latest = self.client.get("/api/scans/" + job["scan_id"], headers=self.headers).json()
+        assert_empty_history()
+        self.assertEqual(latest["sensitive_files"], [{"path": ".env", "kind": "dotenv", "keys": ["AUDIT_KEY"]}])
+        self.assertFalse(any(f["location"]["file"].startswith("private/") for f in latest["findings"]))
+        self.assertNotIn("local-audit-marker", json.dumps(latest))
         self.assertEqual(latest["delta"], {"new": 0, "fixed": 1})  # the edit in the folder was picked up
         self.assertEqual(sorted(p.name for p in source.rglob("*")), before)
 

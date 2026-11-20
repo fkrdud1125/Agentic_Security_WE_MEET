@@ -15,7 +15,7 @@ import requests
 
 from scanner.history import compare, evidence_files, list_scans, save_scan
 from scanner.context import Context
-from scanner.ingest import snapshot, languages
+from scanner.ingest import git, snapshot, languages
 from scanner.kisa import checklist, legacy_coverage
 from scanner.models import Change, ScanResult, Severity, Status, Target, Trigger
 from scanner.static import inspect, profile
@@ -87,13 +87,19 @@ def render(result):
     return "\n".join(rows) + "\n"
 
 
-def baseline(database, repo, output):
-    """The newest earlier scan of this repo whose full result is still in the output folder."""
+def baseline(database, repo, output, branch, commit):
+    """Use the latest available scan on this branch that HEAD actually descends from."""
     if not database.is_file():
         return None
     for row in list_scans(database, str(repo)):
+        if row["branch"] != branch or not row["commit_sha"]:
+            continue
         try:
-            return ScanResult.from_json((output / row["scan_id"] / "scan_result.json").read_text(encoding="utf-8"))
+            if row["commit_sha"] != commit:
+                git(repo, "merge-base", "--is-ancestor", row["commit_sha"], commit)
+            result = ScanResult.from_json((output / row["scan_id"] / "scan_result.json").read_text(encoding="utf-8"))
+            if result.branch == branch and result.commit == row["commit_sha"]:
+                return result
         except (OSError, ValueError, KeyError, TypeError):
             continue  # moved or damaged result: fall back to an older one, its commit is recorded as the baseline
     return None
@@ -109,7 +115,7 @@ STAGES = ["코드 수집", "정찰", "점검 계획", "정적 검사", "검토·
 
 
 def scan(repo, output, directory, offline=False, trigger=Trigger.MANUAL, progress=lambda stage, text: None,
-         new_high_only=False):
+         new_high_only=False, folder_source=None):
     """progress(stage, text) reports STAGES[stage] and one log line; text never carries source code.
 
     new_high_only (background scans with consent): skip the model plan and send only findings that are
@@ -127,12 +133,13 @@ def scan(repo, output, directory, offline=False, trigger=Trigger.MANUAL, progres
     progress(0, "커밋된 파일을 읽기 전용 사본으로 수집하는 중")
     with tempfile.TemporaryDirectory() as temp:
         source = Path(temp)
-        commit, branch, files = snapshot(repo, source)
+        commit, branch, files = snapshot(repo, source, folder_source=folder_source)
         progress(0, f"파일 {len(files)}개 수집 · 커밋 {commit[:12]}")
-        previous = baseline(directory / "scan-history.sqlite3", repo, output)
+        previous = baseline(directory / "scan-history.sqlite3", repo, output, branch, commit)
         exclusions = getattr(files, 'excluded', set())
         excluded_previous = {name for f in previous.findings if f.change != Change.FIXED
-                             for name in evidence_files(f) if name in exclusions} if previous else set()
+                             for name in evidence_files(f) if name and
+                             any(p.as_posix() in exclusions for p in (Path(name), *Path(name).parents))} if previous else set()
         if not (files or getattr(files, 'sensitive_files', []) or getattr(files, 'skipped', []) or excluded_previous):
             raise ScanInputError("제외 규칙 적용 후 검사 가능한 텍스트 파일이 없습니다.")
         app = profile(source, files)

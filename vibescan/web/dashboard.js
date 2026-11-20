@@ -363,7 +363,7 @@ function render() {
   $("verdict-title").textContent = urgent ? `배포 전에 ${urgent}가지를 먼저 확인하세요.`
     : later ? `우선순위가 낮은 ${later}가지를 확인하세요.` : "자동 점검에서 열린 문제가 없습니다.";
   const notes = d.baseline_commit ? [fresh && `새로 발견한 문제 ${fresh}가지`, fixed.length && `해결된 문제 ${fixed.length}가지`]
-    : ["첫 검사입니다. 다음 검사부터 변화를 비교합니다."];
+    : ["이 브랜치의 현재 커밋과 비교할 이전 검사 결과가 없습니다."];
   const incomplete = (d.coverage || []).filter(c => c.execution !== "completed").length;
   if (incomplete) notes.push(`직접 확인할 점검 항목 ${incomplete}개`);
   $("delta").textContent = notes.filter(Boolean).join(" · ") || "지난 검사와 비교해 새로 발견되거나 해결된 문제가 없습니다.";

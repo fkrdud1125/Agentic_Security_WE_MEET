@@ -140,7 +140,7 @@ async function main() {
   run("resetFilters()");
   h.seed({...sample("clean"), baseline_commit: null});
   assert.match(get("verdict-title").textContent, /열린 문제가 없습니다/);
-  assert.match(get("delta").textContent, /첫 검사/);
+  assert.match(get("delta").textContent, /비교할 이전 검사 결과가 없습니다/);
   h.seed(sample("later", "C:/a", [finding("m", "Medium")]));
   assert.match(get("verdict-title").textContent, /우선순위가 낮은 1가지/);
 

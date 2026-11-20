@@ -145,6 +145,7 @@ def detect(name, content, hidden=None):
     hits = {}
     if hidden is None:
         hidden = set()
+    hidden.update(hidden_values(content))
     lines = content.splitlines()
     sample = bool(SAMPLE_PATH.search(name))
     lockfile = name.rsplit("/", 1)[-1].lower() in LOCKFILES
@@ -216,8 +217,6 @@ def detect(name, content, hidden=None):
                         dynamic_parts = java_dynamic_parts(content)
                     quote_col = len(text[:match.start(2) - 1].encode())
                     if (line - 1, quote_col) in dynamic_parts:
-                        if len(match.group(2)) >= 8:
-                            hidden.add(match.group(2))
                         continue
                 add(line, match.group(2),
                     why=f"'{match.group(1)[:40]}'에 대입된 값", var=match.group(1))
@@ -241,6 +240,8 @@ def detect(name, content, hidden=None):
                             owner.update((id(c), key.value) for c in ast.walk(item))
             for node in sensitive_literals(tree):
                 if isinstance(node, ast.Constant):
+                    if node.value:
+                        hidden.add(node.value)
                     add(node.lineno, node.value, listed=id(node) in listed, owner=owner.get(id(node), ""))
         except (SyntaxError, ValueError):
             pass

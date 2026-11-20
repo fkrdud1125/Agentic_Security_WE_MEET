@@ -140,13 +140,14 @@ class EvidenceTests(unittest.TestCase):
         from scanner.static import inspect
         long_value = "Aa19" * 60
         (self.base / "config.py").write_text(
-            f'SECRET_KEY = "dev"; password = "second-private"; api_token = "{long_value}"\n'
+            f'SECRET_KEY = "dev"; password = "second-private"; api_token = "{long_value}"; backup_password = "Pin789"\n'
+            'other_password = (\n    "Pin456"\n)\n'
         )
         with patch("scanner.static.semgrep", return_value=[]):
             findings = inspect(self.base, ["config.py"])
         self.assertTrue(findings)
         for finding in findings:
-            for value in ("dev", "second-private", long_value[:12]):
+            for value in ("dev", "second-private", long_value[:12], "Pin789", "Pin456"):
                 self.assertNotIn(value, finding.evidence + finding.fix_diff)
 
     def test_every_rule_explains_its_impact_and_shows_a_fix(self):

@@ -72,12 +72,76 @@ def ignored(path, ignores):
     return False
 
 
-def snapshot(repo, destination):
+def eligible_path(name):
+    return not any(part in ("", ".", "..") or part.casefold() in EXCLUDED
+                   or part.endswith((" ", ".")) or PureWindowsPath(part).is_reserved()
+                   or any(ord(c) < 32 or c in ':\\*?"<>|' for c in part) for part in name.split("/"))
+
+
+def scan_file(path):
+    return (sensitive_kind(path) or path.name in {'.env.example', '.env.sample', 'Dockerfile'}
+            or (path.suffix.lower() in EXTENSIONS and not path.name.lower().endswith((".min.js", ".min.css"))
+                and not path.name.startswith(".")))
+
+
+def plain_files(repo, source, destination):
+    """Read eligible files into the temporary scan directory. Git only lists names."""
+    source = source.resolve(strict=True)
+    listing = ("--work-tree", str(source), "ls-files", "-z", "--others", "--exclude-standard",
+               *(f"--exclude={part}/" for part in sorted(EXCLUDED)))
+    files = Files()
+    custom = source / ".vibescanignore"
+    ignores = {}
+    if custom.is_file() and custom.resolve() == custom:
+        with custom.open("rb") as stream:
+            patterns = stream.read(MAX_FILE + 1)
+        if len(patterns) > MAX_FILE:
+            raise ValueError("제외 규칙 파일이 크기 제한을 초과합니다.")
+        ignores[Path(custom.name)] = GitIgnoreSpec.from_lines(patterns.decode("utf-8", "replace").splitlines())
+    total = 0
+    for raw in git(repo, *listing).split(b"\0"):
+        try:
+            name = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        path = Path(name)
+        if not eligible_path(name) or not scan_file(path):
+            continue
+        original = source / path
+        if ignored(path, ignores) or original.resolve() != original or not original.is_file():
+            files.excluded.add(name)
+            continue
+        size = original.stat().st_size
+        kind = sensitive_kind(path)
+        if kind not in (None, 'dotenv') or size > MAX_FILE:
+            if kind:
+                files.sensitive_files.append({'path': name, 'kind': kind, 'keys': []})
+            else:
+                files.skipped.append(name)
+            continue
+        with original.open("rb") as stream:
+            blob = stream.read(MAX_FILE + 1)
+        total += len(blob)
+        if total > MAX_TOTAL:
+            raise ValueError("검사 대상이 64 MiB를 초과합니다. .vibescanignore로 범위를 줄이세요.")
+        if len(blob) > MAX_FILE:
+            files.skipped.append(name)
+        else:
+            materialize(destination, path, blob, files)
+    files.excluded.update(os.fsdecode(raw).rstrip('/') for raw in
+                          git(repo, *listing, "--ignored", "--directory").split(b"\0") if raw)
+    return files
+
+
+def snapshot(repo, destination, folder_source=None):
     root = Path(os.fsdecode(git(repo, "rev-parse", "--show-toplevel").rstrip(b"\r\n"))).resolve()
     if repo.resolve() != root:
         raise ValueError("검사할 Git 저장소의 루트 폴더를 지정하세요.")
     commit = git(root, "rev-parse", "--verify", "HEAD^{commit}").decode().strip()
     branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").decode().strip()
+    branch = None if branch == "HEAD" else branch
+    if folder_source is not None:
+        return commit, branch, plain_files(repo, folder_source, destination)
     entries = []
     ignores = {}
     files = Files()
@@ -93,21 +157,14 @@ def snapshot(repo, destination):
         except UnicodeDecodeError:
             continue
         path = Path(name)
-        parts = name.split("/")
-        if any(part in ("", ".", "..") or part.casefold() in EXCLUDED
-               or part.endswith((" ", ".")) or PureWindowsPath(part).is_reserved()
-               or any(ord(c) < 32 or c in ':\\*?"<>|' for c in part) for part in parts):
+        if not eligible_path(name):
             continue
         if path.name in (".gitignore", ".vibescanignore"):
             if int(size) > MAX_FILE:
                 raise ValueError("제외 규칙 파일이 크기 제한을 초과합니다.")
             ignores[path] = GitIgnoreSpec.from_lines(git(root, "cat-file", "blob", oid.decode())
                                                      .decode("utf-8", "replace").splitlines())
-        elif (sensitive_kind(path) or path.name in {'.env.example', '.env.sample', 'Dockerfile'}):
-            entries.append((path, oid.decode(), int(size)))
-        elif (path.suffix.lower() in EXTENSIONS
-              and not path.name.lower().endswith((".min.js", ".min.css"))
-              and not path.name.startswith(".")):
+        elif scan_file(path):
             entries.append((path, oid.decode(), int(size)))
 
     selected = []
@@ -140,27 +197,31 @@ def snapshot(repo, destination):
         blob = stream.read(size)
         if len(blob) != size or stream.read(1) != b"\n":
             raise ValueError("Git 파일이 불완전합니다.")
-        kind = sensitive_kind(path)
-        if kind:
-            keys = re.findall(r'(?m)^(?:export\s+)?([A-Z_][A-Z0-9_]{0,127})\s*=', blob.decode('utf-8', 'replace')) if kind == 'dotenv' else []
-            files.sensitive_files.append({'path': path.as_posix(), 'kind': kind, 'keys': sorted(set(keys))})
-            continue
-        try:
-            blob.decode("utf-8")
-        except UnicodeDecodeError:
-            files.skipped.append(path.as_posix())
-            continue
-        if b"\0" in blob:
-            files.skipped.append(path.as_posix())
-            continue
-        target = destination / path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            with target.open("xb") as output:
-                output.write(blob)
-        except FileExistsError:
-            # Config.py and config.py are one file on Windows/macOS: scan the first, report the second as not checked.
-            files.skipped.append(path.as_posix())
-            continue
-        files.append(path.as_posix())
-    return commit, None if branch == "HEAD" else branch, files
+        materialize(destination, path, blob, files)
+    return commit, branch, files
+
+
+def materialize(destination, path, blob, files):
+    name = path.as_posix()
+    kind = sensitive_kind(path)
+    if kind:
+        keys = re.findall(r'(?m)^(?:export\s+)?([A-Z_][A-Z0-9_]{0,127})\s*=', blob.decode('utf-8', 'replace')) if kind == 'dotenv' else []
+        files.sensitive_files.append({'path': name, 'kind': kind, 'keys': sorted(set(keys))})
+        return
+    try:
+        blob.decode("utf-8")
+    except UnicodeDecodeError:
+        files.skipped.append(name)
+        return
+    if b"\0" in blob:
+        files.skipped.append(name)
+        return
+    target = destination / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with target.open("xb") as output:
+            output.write(blob)
+    except FileExistsError:
+        files.skipped.append(name)
+        return
+    files.append(name)

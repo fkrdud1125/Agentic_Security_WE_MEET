@@ -213,13 +213,29 @@ def sql_flows(methods, classes, implementations):
 
 
 def detect(contents):
+    # Test-only beans and methods are absent from the deployed application's classpath.
+    groups = defaultdict(dict)
+    for path, source in contents.items():
+        if not path.endswith('.java'):
+            continue
+        match = re.search(r'(?:^|/)src/([^/]+)/java/', path)
+        group = match[1] if match else 'main'
+        groups[group][path] = source
+    hits, routes, partial = [], [], set()
+    for sources in groups.values():
+        found, mapped, incomplete = detect_source_set(sources)
+        hits.extend(found)
+        routes.extend(mapped)
+        partial.update(incomplete)
+    return hits, routes, partial
+
+
+def detect_source_set(contents):
     parser = Parser(Language(tree_sitter_java.language()))
     methods, classes, partial = [], set(), set()
     controllers, chains, enabled = [], [], False
     interfaces = []
     for file, source in contents.items():
-        if not file.endswith('.java'):
-            continue
         root = parser.parse(source.encode()).root_node
         if root.has_error:
             partial.add(file)

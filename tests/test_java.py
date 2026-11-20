@@ -101,6 +101,18 @@ class JavaTests(unittest.TestCase):
                 self.assertEqual(rows[0]['auth_guard'], expected)
                 self.assertEqual(any(h.cwe == 'CWE-862' for h in hits), expected in ('permitAll', 'authenticated'))
 
+    def test_test_configuration_cannot_guard_production_routes(self):
+        production = 'module/src/main/java/demo/'
+        for test_set in ('test', 'integrationTest'):
+            test = f'module/src/{test_set}/java/demo/'
+            config = CONFIG.replace('@Bean', '@Bean @Order(1)').replace('.authenticated()', '.hasRole("ADMIN")')
+            hits, rows, partial = detect({production + 'Api.java': API, production + 'Config.java': CONFIG,
+                                          test + 'Api.java': API, test + 'Config.java': config})
+            self.assertFalse(partial)
+            self.assertEqual([h.file for h in hits if h.rule_id == 'vs-java-admin-policy'], [production + 'Api.java'])
+            self.assertEqual({r['file']: r['admin_guard'] for r in rows},
+                             {production + 'Api.java': False, test + 'Api.java': True})
+
     def test_ordered_chains_and_duplicate_order(self):
         first = CONFIG.replace('class Config', 'class Early').replace('@Bean', '@Bean @Order(1)')
         first = first.replace('http.authorize', 'http.securityMatcher("/public/**").authorize')

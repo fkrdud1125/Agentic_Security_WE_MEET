@@ -178,10 +178,7 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
         return dest
 
     def snapshot_folder(dest, source=None):
-        """Record a plain folder's current files as a commit in VibeScan's own Git directory.
-
-        The folder itself is only read: Git keeps the index and objects under dest, never in the source.
-        """
+        """Record a scan marker. Plain folder contents never enter the managed Git index."""
         if source is None:
             # Git stores the path as UTF-8; reading it in the Windows locale breaks paths like "바탕 화면".
             source = git(dest, "config", "vibescan.source").decode("utf-8").strip()
@@ -190,11 +187,11 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
             run_git("config", "vibescan.source", str(source), cwd=dest)
         if not Path(source).is_dir():
             raise FileNotFoundError(source)
-        tree = ["--git-dir", str(dest / ".git"), "--work-tree", str(source)]
-        run_git(*tree, "add", "-A", cwd=source)
-        # --allow-empty: a rescan of an unchanged folder still records which snapshot was scanned.
-        run_git(*tree, "-c", "user.name=VibeScan", "-c", "user.email=vibescan@localhost", "-c", "commit.gpgsign=false",
-                "commit", "-q", "--allow-empty", "-m", "VibeScan folder snapshot", cwd=source)
+        # Older managed snapshots may have tracked raw files. Start every new tree empty.
+        run_git("read-tree", "--empty", cwd=dest)
+        run_git("-c", "user.name=VibeScan", "-c", "user.email=vibescan@localhost", "-c", "commit.gpgsign=false",
+                "commit", "-q", "--allow-empty", "-m", "VibeScan folder scan", cwd=dest)
+        return Path(source)
 
     def plain_folder(raw):
         """A folder outside any Git repository gets a VibeScan-managed snapshot; anything else is returned as is."""
@@ -239,16 +236,18 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
         try:
             if Path(repo).is_relative_to(clones):
                 # VibeScan owns these clones, so a hard reset to the remote HEAD discards nothing of the user's.
-                run_git("fetch", "--depth", "1", "--no-tags", "origin", "HEAD", cwd=repo)
+                # Keep commit ancestry available for branch-aware scan comparisons.
+                run_git("fetch", "--no-tags", "origin", "HEAD", cwd=repo)
                 run_git("reset", "--hard", "--quiet", "FETCH_HEAD", cwd=repo)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
             with lock:
                 job = {"state": "failed", "repo": repo, "message": "GitHub에서 최신 커밋을 가져오지 못했습니다. "
                        "네트워크와 저장소 접근 권한을 확인하세요. 기존 결과는 유지됩니다."}
             return
+        options = {}
         try:
             if Path(repo).is_relative_to(folders):
-                snapshot_folder(Path(repo))
+                options["folder_source"] = snapshot_folder(Path(repo))
         except Exception:
             # Anything escaping here would kill the thread and leave the job "running" forever.
             with lock:
@@ -260,7 +259,7 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
                 job.update(stage=stage, log=(job.get("log", []) + [text])[-30:])
 
         try:
-            folder, note, issue = scan(Path(repo), root, directory, offline=offline, progress=report)
+            folder, note, issue = scan(Path(repo), root, directory, offline=offline, progress=report, **options)
             completed = {"state": "completed", "repo": repo, "scan_id": folder.name, "message": note, "issue": issue}
         except subprocess.TimeoutExpired:
             completed = {"state": "failed", "repo": repo, "message": "검사 시간이 초과되었습니다. 기존 결과는 유지됩니다."}

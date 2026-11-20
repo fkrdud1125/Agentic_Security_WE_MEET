@@ -96,6 +96,31 @@ class PipelineTests(unittest.TestCase):
                     row = next(r for r in result["kisa_checklist"] if r["code"] == "CI-05")
                     self.assertEqual(row["findings"], [result["findings"][0]["id"]])
 
+    def test_comparison_follows_branch_and_commit_ancestry(self):
+        out, state = self.base / "out", self.base / "state"
+        def scan():
+            folder, _, _ = cli.scan(self.repo, out, state, offline=True)
+            return json.loads((folder / "scan_result.json").read_text(encoding="utf-8"))
+
+        first_branch = self.git("branch", "--show-current").decode().strip()
+        with patch("scanner.static.semgrep", return_value=[]):
+            self.git("switch", "-qc", "feature")
+            first = scan()
+            self.git("switch", "-q", first_branch)
+            self.assertIsNone(scan()["baseline_commit"])
+            self.git("switch", "-q", "feature")
+            self.assertEqual(scan()["baseline_commit"], first["commit"])
+            self.git("restore", "--", "app.py")
+            self.git("switch", "--orphan", "replacement")
+            (self.repo / "app.py").write_text("print(1)")
+            self.git("add", "app.py")
+            self.git("-c", "user.name=T", "-c", "user.email=t@example.invalid",
+                     "-c", "commit.gpgsign=false", "commit", "-qm", "unrelated history")
+            self.git("branch", "-M", "feature")
+            rewritten = scan()
+            self.assertIsNone(rewritten["baseline_commit"])
+            self.assertEqual(rewritten["delta"]["fixed"], 0)
+
     def test_stream_requires_completion(self):
         response = Mock()
         response.__enter__ = Mock(return_value=response)
