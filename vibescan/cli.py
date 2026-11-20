@@ -13,7 +13,7 @@ from pathlib import Path
 
 import requests
 
-from scanner.history import compare, list_scans, save_scan
+from scanner.history import compare, evidence_files, list_scans, save_scan
 from scanner.context import Context
 from scanner.ingest import snapshot, languages
 from scanner.kisa import checklist, legacy_coverage
@@ -58,6 +58,10 @@ def render(result):
                      f"- 영향: {f.impact_ko}", f"- 수정 방법: {f.remediation_ko}",
                      "", "근거 코드:", "", "```", f.evidence, "```",
                      "", f.fix_note, "", "```diff", f.fix_diff, "```"])
+        if f.rule_id == 'vs-java-sql-flow' and f.trace:
+            rows.append("호출 경로: " + " → ".join(f"{p['file']}:{p['line']} ({p['method']})" for p in f.trace))
+        if f.rule_id == 'vs-java-admin-policy' and f.trace:
+            rows.append(f"필터 체인 설정: {f.trace[0]['file']}:{f.trace[0]['line']}")
     if not opened:
         rows.append("적용한 규칙에서 발견된 항목이 없습니다.")
         if dismissed:
@@ -70,6 +74,10 @@ def render(result):
     if fixed:
         rows.extend(["", "## 직전 스캔 이후 해결됨"])
         rows.extend(f"- {f.title} · {f.location.file}:{f.location.line}" for f in fixed)
+    java_routes = [r for r in result.routes if 'policy_source' in r]
+    if java_routes:
+        rows.extend(["", "## Spring MVC 경로별 정적 인가 단서"])
+        rows.extend(f"- {r['method']} `{r['path']}` · {r['auth_guard']} · {r['file']}:{r['line']}" for r in java_routes)
     rows.extend(["", "## 추가 확인", *["- " + s for s in MANUAL],
                  "- 외부 입력 도달 여부와 제시한 수정 예시는 실제 호출 문맥에서 검토하세요."])
     rows.extend(["", "## 점검 한계", *['- ' + x for x in result.profile.limitations],
@@ -96,7 +104,7 @@ class ScanInputError(ValueError):
 
 
 # Languages whose files are collected but have no vulnerability rules: only credential checks run on them.
-UNSUPPORTED = {"php": "PHP", "rb": "Ruby", "go": "Go", "java": "Java", "kt": "Kotlin"}
+UNSUPPORTED = {"php": "PHP", "rb": "Ruby", "go": "Go", "kt": "Kotlin"}
 STAGES = ["코드 수집", "정찰", "점검 계획", "정적 검사", "검토·보고서"]
 
 
@@ -123,17 +131,19 @@ def scan(repo, output, directory, offline=False, trigger=Trigger.MANUAL, progres
         progress(0, f"파일 {len(files)}개 수집 · 커밋 {commit[:12]}")
         previous = baseline(directory / "scan-history.sqlite3", repo, output)
         exclusions = getattr(files, 'excluded', set())
-        excluded_previous = {f.location.file for f in previous.findings
-                             if f.change != Change.FIXED and f.location.file in exclusions} if previous else set()
+        excluded_previous = {name for f in previous.findings if f.change != Change.FIXED
+                             for name in evidence_files(f) if name in exclusions} if previous else set()
         if not (files or getattr(files, 'sensitive_files', []) or getattr(files, 'skipped', []) or excluded_previous):
             raise ScanInputError("제외 규칙 적용 후 검사 가능한 텍스트 파일이 없습니다.")
         app = profile(source, files)
         progress(1, f"정찰 완료 · {app.framework or '프레임워크 미확인'} · 라우트 {app.routes}개")
         context = Context(source, files)
-        app.limitations = ["Python·JS/TS·템플릿의 제한된 정적 규칙 검사입니다. 함수 간 흐름과 동적 검사는 확인하지 않았습니다."]
+        app.limitations = ["언어별로 지원하는 정적 규칙을 적용합니다. 실행 중 동작은 수동 확인 대상입니다."]
         counts = languages(files)
+        if counts.get("java"):
+            app.limitations.append("Java는 JDBC SQL 호출 경로와 Spring MVC 관리자 경로의 명시적 인가 정책을 점검합니다. 동적 호출·복잡한 조건·운영 권한은 수동 확인 대상입니다.")
         others = {UNSUPPORTED[k]: n for k, n in counts.items() if k in UNSUPPORTED}
-        mostly_unsupported = sum(others.values()) > sum(counts.get(k, 0) for k in ("python", "javascript", "typescript"))
+        mostly_unsupported = sum(others.values()) > sum(counts.get(k, 0) for k in ("python", "javascript", "typescript", "java"))
         if others:
             names = ", ".join(f"{label} {n}개" for label, n in others.items())
             app.limitations.insert(0, f"탐지 규칙이 없는 언어의 파일({names})은 인증정보 노출만 확인했고 다른 취약점은 검사하지 않았습니다.")
@@ -154,6 +164,8 @@ def scan(repo, output, directory, offline=False, trigger=Trigger.MANUAL, progres
             progress(2, note)
         progress(3, "정적 규칙·시크릿·설정 검사 중")
         findings = inspect(source, files)
+        if any('policy_source' in route for route in getattr(findings, 'routes', [])):
+            app.framework = ', '.join(filter(None, [app.framework, 'Spring MVC']))
         progress(3, f"발견 후보 {len(findings)}건")
         findings.sort(key=lambda f: (list(Severity).index(f.severity), f.confidence != "Likely", f.id))
         partial = sorted(set(getattr(findings, 'partial_files', [])) | excluded_previous)
@@ -202,7 +214,7 @@ def scan(repo, output, directory, offline=False, trigger=Trigger.MANUAL, progres
                         branch=branch, commit=commit, baseline_commit=previous.commit if matched else None, trigger=trigger,
                         checklist=[c['name'] for c in coverage],
                         analysis_note=note, coverage=coverage,
-                        engine={'version': '0.2.0', 'rulepack': 'vibescan-2026.11.1', 'semgrep': '1.185.0'},
+                        engine={'version': '0.2.0', 'rulepack': 'vibescan-2026.11.2', 'semgrep': '1.185.0'},
                         languages=languages(files), partial_files=partial,
                         sensitive_files=getattr(files, 'sensitive_files', []), routes=getattr(findings, 'routes', []),
                         config_summary=getattr(findings, 'config_summary', []), kisa_checklist=kisa_rows)

@@ -194,11 +194,11 @@ def identity(user=Depends(get_current_user)): pass
         self.assertEqual([r['admin_guard'] for r in rows], [False, True, True, False])
 
     def test_silent_engine_skip_and_open_candidate_preserve_partial_coverage(self):
-        for name in ('checked.py', 'skipped.py', 'notes.txt'):
+        for name in ('checked.py', 'skipped.py', 'Skipped.java', 'notes.txt'):
             (self.root / name).write_text('pass')
         with patch('scanner.static.semgrep', return_value=Matches([], scanned_files=['checked.py'])):
-            found = inspect(self.root, ['checked.py', 'skipped.py', 'notes.txt'])
-        self.assertEqual(found.partial_files, ['skipped.py'])
+            found = inspect(self.root, ['checked.py', 'skipped.py', 'Skipped.java', 'notes.txt'])
+        self.assertEqual(found.partial_files, ['Skipped.java', 'skipped.py'])
         finding = normalize([RawHit('semgrep','sql','checked.py',1,'CWE-89',['CI-02'],'SQL','fix')])[0]
         rows = checklist([finding], {'python': 2}, found.partial_files)
         sql = next(row for row in rows if row['code'] == 'CI-02')
@@ -236,7 +236,8 @@ app.config["DEBUG"] = True
     def test_checklist_never_claims_unsupported_or_dismissed_safe(self):
         rows = checklist([], {'java': 2}, [])
         self.assertEqual(len(rows), 25)
-        self.assertEqual(next(r for r in rows if r['code'] == 'CI-02')['status'], '부분 점검')
+        self.assertEqual(next(r for r in rows if r['code'] == 'CI-02')['status'], '자동 점검 범위 내 미발견')
+        self.assertEqual(next(r for r in rows if r['code'] == 'CI-06')['status'], '부분 점검')
         self.assertTrue(all(r['source_verified'] is False for r in rows))
         finding = normalize([RawHit('secrets','key','a.py',1,'CWE-798',['CI-05'],'key','rotate')])[0]
         finding.status = Status.DISMISSED

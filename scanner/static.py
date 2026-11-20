@@ -4,7 +4,7 @@ import ast
 import re
 
 from .models import AppProfile
-from .detectors import secrets, config, routes
+from .detectors import secrets, config, routes, java
 from .detectors.semgrep import convert, semgrep
 from .normalize import RawHit, normalize, code_identity
 
@@ -67,7 +67,7 @@ def inspect(directory, files):
     raw = [convert(hit, allowed) for hit in matched]
     partial = list(getattr(matched, 'partial_files', []))
     if hasattr(matched, 'scanned_files'):
-        supported = ('.py', '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs',
+        supported = ('.py', '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.java',
                      '.html', '.j2', '.jinja', '.vue', '.svelte', '.astro')
         partial.extend(name for name in allowed - matched.scanned_files if name.lower().endswith(supported))
     if any(name not in allowed for name in partial):
@@ -80,6 +80,11 @@ def inspect(directory, files):
             raise ValueError('검사 근거 줄이 파일 범위 밖입니다.')
         hit.identity = code_identity(contents[hit.file], hit.line, hit.file.endswith('.py'))
     route_rows, settings = [], []
+    if any(name.endswith('.java') for name in contents):
+        java_hits, java_routes, java_partial = java.detect(contents)
+        raw.extend(java_hits)
+        route_rows.extend(java_routes)
+        partial.extend(java_partial)
     hidden = {}
     for name, content in contents.items():
         hidden[name] = set()

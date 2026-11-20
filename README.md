@@ -75,7 +75,9 @@ python3 -m venv .venv
 | Git이 아닌 일반 폴더 | 그 순간의 폴더 파일 | 원본 폴더는 바꾸지 않습니다. 스캔할 때마다 새로 읽습니다. |
 | GitHub 주소 | 기본 브랜치의 최신 커밋 | 내 PC에 복제해 두고, 스캔할 때마다 최신 커밋을 받아옵니다. 비공개 저장소는 PC에 설정된 Git 인증이 필요합니다. |
 
-탐지 규칙은 **Python, JavaScript/TypeScript, HTML 템플릿**(Jinja·Vue·Svelte 등)을 다룹니다. PHP·Ruby·Go·Java 파일은 인증정보 노출만 확인하며, 이런 언어가 주 언어이면 결과에 "불완전" 안내가 표시됩니다.
+탐지 규칙은 **Python, JavaScript/TypeScript, Java, HTML 템플릿**(Jinja·Vue·Svelte 등)을 다룹니다. PHP·Ruby·Go 파일은 인증정보 노출만 확인합니다.
+
+Java에서는 Spring MVC의 `@RequestParam` 또는 Servlet의 `getParameter` 입력이 JDBC SQL 본문으로 전달되는지 점검합니다. 소스에서 호출 대상을 식별할 수 있으면 컨트롤러·서비스·저장소 파일을 연결해 보고서에 경로를 표시합니다. Spring MVC 관리자 경로는 `SecurityFilterChain`의 첫 일치 정책 및 `@PreAuthorize`와 대조합니다. 예를 들어 관리자 경로에 로그인만 요구하면 권한 검토 후보로 표시합니다. 실행 프로필, 동적 정책, 실제 사용자별 접근 결과는 수동 확인 대상입니다.
 
 ## AI 심층 분석 연결하기 (선택)
 

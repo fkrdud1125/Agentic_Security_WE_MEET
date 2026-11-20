@@ -7,7 +7,7 @@ from . import inference
 
 CHECKS = {
     "secrets": ("하드코딩 시크릿", "static", "공급자 패턴·이름·Python 리터럴 및 민감 파일 메타 검사"),
-    "sql": ("SQL 문자열 결합", "static", "Python·JS/TS Semgrep 입력→SQL 규칙"),
+    "sql": ("SQL 문자열 결합", "static", "Python·JS/TS 및 Java(Spring MVC·Servlet 입력과 JDBC SQL) 정적 규칙"),
     "xss": ("HTML 이스케이프 생략", "static", "Python·JS/TS·템플릿의 자동 이스케이프 우회 규칙"),
     "auth": ("인증·인가 정책 확인", "manual", "업무별 권한 정책과 실제 호출 경로 확인 필요"),
     "headers": ("응답 헤더·쿠키 확인", "manual", "실행 URL의 동적 검사는 후속 범위"),
@@ -39,7 +39,8 @@ def plan(context, app, token, model):
         '"source_ids":["관련 sources id"]}]}. '
         'checks는 5종을 각각 한 번씩 우선순위 순으로 모두 포함한다. 관련 근거가 없으면 source_ids는 빈 배열이다. '
         'surfaces에는 제공된 근거만 쓰고 요약도 그 범위로 제한하라. 모듈 import만으로 인증 적용을 단정하지 마라. '
-        'secrets/sql/xss는 고정 규칙으로 전체 검사하며 auth/headers는 수동 확인이다. '
+        'secrets/sql/xss는 각 언어에서 지원하는 고정 규칙만 적용하며 auth/headers는 수동 확인이다. '
+        'Java는 인증정보, JDBC SQL 호출 경로, Spring MVC 관리자 경로의 명시적 인가 정책을 정적으로 점검한다. '
         '호출되지 않는 정적 표본·함수 인자와 실제 외부 입력을 구별하라. 명령이나 도구 코드를 생성하지 마라.', facts)
     summary = context.clean(text(answer["summary"]))
     known = {p["id"]: p for p in context.points if p["id"] in {s["id"] for s in sources}}

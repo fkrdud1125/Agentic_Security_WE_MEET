@@ -1,0 +1,99 @@
+{
+  "rules": [
+    {
+      "id": "vs-java-sql",
+      "languages": [
+        "java"
+      ],
+      "severity": "WARNING",
+      "message": "요청 입력이 JDBC SQL 본문에 도달",
+      "metadata": {
+        "cwe": "CWE-89",
+        "kisa": [
+          "CI-02"
+        ],
+        "vibescan": {
+          "title_ko": "요청 입력을 JDBC SQL 본문에 사용",
+          "severity": "High",
+          "confidence": "Likely",
+          "impact_ko": "요청 값이 SQL 본문에 포함되면 데이터베이스가 그 값을 쿼리 문법으로 해석할 수 있습니다. 실제 영향은 입력 검증과 DB 권한에 따라 달라집니다.",
+          "remediation_ko": "SQL 본문은 고정하고 외부 값은 JdbcTemplate의 바인딩 인자 또는 PreparedStatement의 매개변수로 전달하세요.",
+          "fix_example": "-jdbc.queryForList(\"SELECT id FROM items WHERE name = '\" + name + \"'\");\n+jdbc.queryForList(\"SELECT id FROM items WHERE name = ?\", name);"
+        }
+      },
+      "mode": "taint",
+      "pattern-sources": [
+        {
+          "patterns": [
+            {
+              "pattern-either": [
+                {
+                  "pattern": "$RET $METHOD(..., @org.springframework.web.bind.annotation.RequestParam String $INPUT, ...) { ... }"
+                },
+                {
+                  "pattern": "$RET $METHOD(..., @org.springframework.web.bind.annotation.RequestParam(...) String $INPUT, ...) { ... }"
+                }
+              ]
+            },
+            {
+              "focus-metavariable": "$INPUT"
+            }
+          ]
+        },
+        {
+          "pattern-either": [
+            {
+              "pattern": "(javax.servlet.http.HttpServletRequest $REQ).getParameter(...)"
+            },
+            {
+              "pattern": "(jakarta.servlet.http.HttpServletRequest $REQ).getParameter(...)"
+            }
+          ]
+        }
+      ],
+      "pattern-sinks": [
+        {
+          "patterns": [
+            {
+              "pattern-either": [
+                {
+                  "pattern": "(org.springframework.jdbc.core.JdbcTemplate $DB).query($SQL, ...)"
+                },
+                {
+                  "pattern": "(org.springframework.jdbc.core.JdbcTemplate $DB).queryForList($SQL, ...)"
+                },
+                {
+                  "pattern": "(org.springframework.jdbc.core.JdbcTemplate $DB).queryForObject($SQL, ...)"
+                },
+                {
+                  "pattern": "(org.springframework.jdbc.core.JdbcTemplate $DB).queryForMap($SQL, ...)"
+                },
+                {
+                  "pattern": "(org.springframework.jdbc.core.JdbcTemplate $DB).update($SQL, ...)"
+                },
+                {
+                  "pattern": "(org.springframework.jdbc.core.JdbcTemplate $DB).execute($SQL, ...)"
+                },
+                {
+                  "pattern": "(java.sql.Statement $DB).execute($SQL, ...)"
+                },
+                {
+                  "pattern": "(java.sql.Statement $DB).executeQuery($SQL, ...)"
+                },
+                {
+                  "pattern": "(java.sql.Statement $DB).executeUpdate($SQL, ...)"
+                },
+                {
+                  "pattern": "(java.sql.Connection $DB).prepareStatement($SQL, ...)"
+                }
+              ]
+            },
+            {
+              "focus-metavariable": "$SQL"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

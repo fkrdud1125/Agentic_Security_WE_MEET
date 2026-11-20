@@ -19,8 +19,8 @@ def catalog():
 
 def checklist(findings, languages, partial_files, carried=()):
     rows = []
-    unsupported = set(languages) & {'php', 'rb', 'go', 'java', 'kt', 'vue', 'svelte', 'astro'}
-    code_languages = set(languages) & {'python', 'javascript', 'typescript'}
+    unsupported = set(languages) & {'php', 'rb', 'go', 'kt', 'vue', 'svelte', 'astro'}
+    code_languages = set(languages) & {'python', 'javascript', 'typescript', 'java'}
     for item in catalog()['items']:
         matches = [f.id for f in (*findings, *carried) if item['code'] in f.kisa and f.status == Status.OPEN and f.change != Change.FIXED]
         detectors = item['detectors']
@@ -42,6 +42,15 @@ def checklist(findings, languages, partial_files, carried=()):
                 state = '해당 기능 없음(추정)'; note = '검사한 소스에서 업로드 API 단서를 찾지 못했습니다.'
             if item['code'] == 'CI-08' and code_languages & {'javascript', 'typescript'}:
                 state = '부분 점검'; note = 'SSRF 규칙은 현재 Python만 지원합니다.'
+            if 'java' in code_languages:
+                if item['code'] == 'CI-02':
+                    note += ' Java는 요청 입력에서 JDBC SQL 본문까지 지원하는 메서드 호출 경로를 점검합니다.'
+                elif item['code'] == 'CI-19':
+                    state = '부분 점검'
+                    note += ' Spring MVC 관리자 경로와 정적으로 확인 가능한 Spring Security 정책을 대조합니다.'
+                elif set(detectors) != {'secrets'}:
+                    state = '부분 점검'
+                    note += ' 이 항목의 Java 전용 규칙은 없습니다.'
         coverage_status = state
         if matches:
             state = '취약 후보'

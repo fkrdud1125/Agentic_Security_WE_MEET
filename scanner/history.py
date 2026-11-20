@@ -83,6 +83,13 @@ def list_scans(database: Path, repo_path: str) -> list[dict]:
         return [dict(row) for row in rows]
 
 
+def evidence_files(finding):
+    yield finding.location.file
+    for step in finding.trace:
+        if isinstance(step, dict):
+            yield step.get('file')
+
+
 def compare(findings, previous, commit, partial_files=()):
     """Mark findings new/existing against the previous scan; return its vanished findings as fixed.
 
@@ -106,7 +113,7 @@ def compare(findings, previous, commit, partial_files=()):
     partial = set(partial_files)
     for group in before.values():
         for f in group:
-            unresolved = f.location.file in partial
+            unresolved = not partial.isdisjoint(evidence_files(f))
             # Old reports can contain excerpts written before the current redaction rules.
             historical = replace(f, change=Change.EXISTING if unresolved else Change.FIXED,
                                  evidence='[이전 검사 위치 · 현재 커밋 근거 코드 없음]', fix_diff='',

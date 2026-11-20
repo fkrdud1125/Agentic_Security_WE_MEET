@@ -49,14 +49,15 @@ class HistoryTests(unittest.TestCase):
         previous.commit = "c1"
         previous.findings = [old("F-001", "same", introduced_in="c0"), old("F-002", "same", introduced_in="c0"),
                              old("F-003", "gone"), old("F-004", "broken", file="half.py"),
+                             old("F-007", "flow", file="Store.java", trace=[{'file': 'Service.java'}]),
                              old("F-005", "old-fix", change=Change.FIXED)]
         now = [old("F-001", "same"), old("F-002", "fresh")]
-        kept, gone = compare(now, previous, "c2", ["half.py"])
+        kept, gone = compare(now, previous, "c2", ["half.py", "Service.java"])
         self.assertEqual([(f.change, f.introduced_in) for f in now], [(Change.EXISTING, "c0"), (Change.NEW, "c2")])
         # One of two identical fingerprints vanished, so exactly one is fixed; the unparsed file stays open.
         self.assertEqual(sorted(f.fingerprint for f in gone), ["gone", "same"])
         self.assertTrue(all(f.change == Change.FIXED for f in gone))
-        self.assertEqual([(f.fingerprint, f.change) for f in kept], [("broken", Change.EXISTING)])
+        self.assertEqual([(f.fingerprint, f.change) for f in kept], [("broken", Change.EXISTING), ("flow", Change.EXISTING)])
         self.assertTrue(all(f.evidence != base.evidence and not f.fix_diff for f in kept + gone))
         self.assertEqual(previous.findings[2].change, None)  # the stored previous result is not mutated
         previous.findings.append(old("F-006", ""))

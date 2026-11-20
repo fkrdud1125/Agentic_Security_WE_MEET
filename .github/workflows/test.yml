@@ -46,12 +46,15 @@ jobs:
               sample.mkdir()
               for name in ("app.py", "static_cases.py"):
                   shutil.copy(Path("vulnapp") / name, sample / name)
+              shutil.copy(Path("rules/vibescan/vs-java-sql.java"), sample / "SearchController.java")
               for args in (["init", "-q"], ["add", "."], ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "sample"]):
                   subprocess.run(["git", "-C", str(sample), *args], check=True)
               env = dict(os.environ, XDG_CONFIG_HOME=str(base / "config"), LOCALAPPDATA=str(base / "config"))
               subprocess.run(["vibescan", "scan", str(sample), "--offline", "--output", str(base / "out")], cwd=base, env=env, check=True)
               raw = next((base / "out").glob("*/scan_result.json"))
               result = json.loads(raw.read_text(encoding="utf-8"))
+              assert result["languages"]["java"] == 1
+              assert sum(f["rule_id"] == "vs-java-sql" for f in result["findings"]) == 4
               assert {"CWE-798", "CWE-89", "CWE-79", "CWE-614"} <= {f["cwe"] for f in result["findings"]}
               assert all(f["fingerprint"] and f["kisa"] for f in result["findings"])
               assert result["profile"]["framework"] == "Flask" and result["profile"]["routes"] == 2
