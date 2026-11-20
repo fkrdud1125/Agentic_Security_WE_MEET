@@ -18,7 +18,9 @@
           "title_ko": "쿠키 보호 속성 비활성화",
           "remediation_ko": "인증 쿠키의 Secure·HttpOnly·SameSite를 설정하세요.",
           "severity": "Medium",
-          "confidence": "Potential"
+          "confidence": "Potential",
+          "impact_ko": "인증 쿠키에 HttpOnly·Secure·SameSite가 빠지면 XSS로 쿠키를 훔치거나, 암호화되지 않은 연결이나 다른 사이트의 요청으로 세션을 탈취·악용할 수 있습니다.",
+          "fix_example": "-res.cookie(\"session\", token)\n+res.cookie(\"session\", token, { httpOnly: true, secure: true, sameSite: \"lax\" })"
         }
       },
       "pattern-either": [

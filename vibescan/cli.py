@@ -51,11 +51,12 @@ def render(result):
     for f in sorted(opened, key=lambda item: list(Severity).index(item.severity)):
         rows.extend(["", f"### {f.id} · {f.severity} · {f.title}", "",
                      f"- 위치: `{f.location.file}:{f.location.line}`",
-                     f"- 근거: `{f.evidence}` ({', '.join(f.how_found)})",
+                     f"- 탐지 방식: {', '.join(f.how_found)}",
                      f"- 분류: {f.cwe} · {f.owasp} · {f.confidence}",
                      f"- 판정 근거: {f.triage_reason or '로컬 규칙 탐지 · 모델 검토 없음'}",
                      f"- 최초 규칙 심각도: {f.original_severity or f.severity}",
                      f"- 영향: {f.impact_ko}", f"- 수정 방법: {f.remediation_ko}",
+                     "", "근거 코드:", "", "```", f.evidence, "```",
                      "", f.fix_note, "", "```diff", f.fix_diff, "```"])
     if not opened:
         rows.append("적용한 규칙에서 발견된 항목이 없습니다.")

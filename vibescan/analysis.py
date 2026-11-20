@@ -79,7 +79,7 @@ def plan(context, app, token, model):
 def review(context, findings, token, model):
     snippets = {f.id: context.excerpt(f.location.file, f.location.line) for f in findings}
     data = [{"id": f.id, "type": f.title, "severity": f.severity.value,
-             "evidence": f.evidence, "snippet": snippets[f.id],
+             "snippet": snippets[f.id],
              "file": context.aliases.get(f.location.file),
              "limits": "호출자·런타임·DB 종류가 없으면 추측하지 말고 불확실성을 명시한다."}
             for f in findings]

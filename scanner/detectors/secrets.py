@@ -17,12 +17,40 @@ SENSITIVE = re.compile(r"api.?key|secret|password|token|credential|authorization
 ASSIGNMENT = re.compile(r'''["']?([\w.-]+)["']?\s*[:=]\s*["']([^"'\r\n]*)["']''')
 PLACEHOLDER = re.compile(r"^(?:your[-_ ].*|x{3,}|example|test|dummy|changeme|placeholder|<.*>|\$\{.*\})$", re.I)
 SIGNING = re.compile(r"secret_key|jwt_secret|session_secret", re.I)
-# A lowercase slug ("family-lounge", "esg_strategy") is an identifier unless the line names a real credential.
-SLUG = re.compile(r"[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)+")
+# A lowercase word or slug ("department", "family-lounge") is an identifier unless the line names a real credential.
+SLUG = re.compile(r"[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*")
 STRONG = re.compile(r"pass(?:word|wd)?|pwd|secret|token|credential|api.?key|private.?key|auth", re.I)
+# Lockfiles pair package names ("js-tokens") with versions; only vendor key formats count there.
+LOCKFILES = {"package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock",
+             "pipfile.lock", "uv.lock", "cargo.lock", "composer.lock", "gemfile.lock", "go.sum"}
 # Tests, examples and seed data hold throwaway values; they stay visible but do not raise the risk score.
 SAMPLE_PATH = re.compile(r"(?:^|/)(?:tests?|__tests__|specs?|fixtures?|seeds?|examples?|samples?|mocks?|__mocks__)/"
                          r"|(?:^|/)(?:test_[^/]*|[^/]*_test\.py|[^/]*\.(?:test|spec)\.[jt]sx?)$", re.I)
+
+
+def mask(text, values=()):
+    """Keep the first four characters so a person can recognise the value; never the rest."""
+    for value in sorted(set(values) | set(KEY.findall(text)), key=len, reverse=True):
+        if len(value) >= 8:
+            text = text.replace(value, value[:4] + "••••")
+    return text
+
+
+def env_fix(name, line, value, var):
+    """A diff that reads the value from the environment instead of the source, when the language is known."""
+    env = re.sub(r"[^A-Za-z0-9]+", "_", var).strip("_").upper()
+    if name.endswith(".py"):
+        lookup = f'os.environ["{env}"]'
+    elif name.endswith((".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx")):
+        lookup = f"process.env.{env}"
+    else:
+        return ""
+    for quote in ('"', "'", "`"):
+        literal = quote + value + quote
+        if env and literal in line:
+            return "\n".join([f"--- a/{name}", f"+++ b/{name}", "-" + mask(line, [value]),
+                              "+" + line.replace(literal, lookup, 1)])
+    return ""
 
 
 def hidden_values(source):
@@ -44,14 +72,16 @@ def detect(name, content):
     hits = {}
     lines = content.splitlines()
     sample = bool(SAMPLE_PATH.search(name))
+    lockfile = name.rsplit("/", 1)[-1].lower() in LOCKFILES
 
-    def add(line, value, signing=False, known=False):
-        """known: the value has a vendor key format (sk-live…, AKIA…), which is a leak wherever it sits."""
+    def add(line, value, signing=False, known=False, listed=False, why="인증정보 이름의 변수에 들어 있는 문자열", var=None):
+        """known: a vendor key format (sk-live…, AKIA…), a leak wherever it sits.
+        listed: an item of a tuple/list/set, where plain words are vocabulary, not credentials."""
         if not value or (PLACEHOLDER.fullmatch(value) and not signing):
             return
         if not signing and len(value) < 8:
             return
-        if not (known or signing) and SLUG.fullmatch(value) and not STRONG.search(lines[line - 1]):
+        if not (known or signing) and SLUG.fullmatch(value) and (listed or not STRONG.search(lines[line - 1])):
             return
         weak = signing and len(value) < 32
         rule = 'weak-signing-key' if weak else 'literal-token'
@@ -64,24 +94,34 @@ def detect(name, content):
         elif sample and not known:
             severity, title = Severity.INFO, '테스트·예제 파일의 인증정보 후보'
         previous = hits.get((line, rule))
-        if previous and list(Severity).index(previous.severity) <= list(Severity).index(severity):
-            return  # keep the stronger reading of the same line
-        hits[(line, rule)] = RawHit('secrets', rule, name, line, 'CWE-321' if weak else 'CWE-798',
+        stronger = previous and list(Severity).index(previous.severity) < list(Severity).index(severity)
+        if stronger or (previous and previous.severity == severity and (previous.fix or not var)):
+            return  # keep the stronger reading of the same line, or the one that can offer a fix
+        hit = RawHit('secrets', rule, name, line, 'CWE-321' if weak else 'CWE-798',
             codes, title, '노출된 키를 교체하고 서버 환경변수 또는 비밀 저장소에서 읽으세요. 서명키는 충분한 난수를 사용하세요.',
-            severity, evidence='[인증정보 값 가림]',
+            severity, impact=f"{why}이 소스 코드에 그대로 들어 있습니다. 이 저장소를 볼 수 있는 사람은 누구나 값을 확인할 수 있고, "
+                             "파일에서 지워도 Git 이력에 남으므로 실제 키라면 먼저 교체해야 합니다.",
+            fix=env_fix(name, lines[line - 1], value, var) if var else "",
             identity=code_identity(content, line, name.endswith('.py')))
+        hit.secret = value  # lets the evidence excerpt hide exactly this value
+        hits[(line, rule)] = hit
     for line, text in enumerate(content.splitlines(), 1):
         for match in KEY.finditer(text):
-            add(line, match.group(), known=True)
+            add(line, match.group(), known=True, why="공급자 키 형식의 값")
+        if lockfile:
+            continue
         for match in ASSIGNMENT.finditer(text):
             if SENSITIVE.search(match.group(1)):
-                add(line, match.group(2), bool(SIGNING.search(match.group(1))))
+                add(line, match.group(2), bool(SIGNING.search(match.group(1))),
+                    why=f"'{match.group(1)[:40]}'에 대입된 값", var=match.group(1))
     if name.endswith('.py'):
         try:
             tree = ast.parse(content)
+            listed = {id(item) for node in ast.walk(tree) if isinstance(node, (ast.Tuple, ast.List, ast.Set))
+                      for item in node.elts}
             for node in sensitive_literals(tree):
                 if isinstance(node, ast.Constant):
-                    add(node.lineno, node.value)
+                    add(node.lineno, node.value, listed=id(node) in listed)
             for node in ast.walk(tree):
                 if isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(node.value, ast.Constant):
                     targets = node.targets if isinstance(node, ast.Assign) else [node.target]

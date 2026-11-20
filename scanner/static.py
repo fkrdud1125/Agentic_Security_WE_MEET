@@ -1,9 +1,7 @@
 """Local read-only checks and evidence normalization for committed web sources."""
 
 import ast
-import io
 import re
-import tokenize
 
 from .models import AppProfile
 from .detectors import secrets, config, routes
@@ -11,18 +9,15 @@ from .detectors.semgrep import convert, semgrep
 from .normalize import RawHit, normalize, code_identity
 
 
-# Only structural syntax from a matched line enters reports or model input.
-VISIBLE_NAMES = {"return", "def", "if", "else", "execute", "fetchone", "Markup", "True", "False", "None"}
+def excerpt(content, line, hidden=()):
+    """The real code around a finding, for the person reading it locally; detected secrets keep 4 characters.
 
-
-def masked_line(line):
-    try:
-        tokens = tokenize.generate_tokens(io.StringIO(line.strip()).readline)
-        return " ".join(t.string if (t.type == tokenize.OP or t.string in VISIBLE_NAMES)
-                        else "[가림]" for t in tokens if t.type in
-                        (tokenize.OP, tokenize.NAME, tokenize.NUMBER, tokenize.STRING))[:350]
-    except (IndentationError, tokenize.TokenError):
-        return "[코드 생략]"
+    The model never receives this text: it gets the sanitized Context excerpt instead.
+    """
+    lines = content.splitlines()
+    rows = [f"{'>' if n == line else ' '} {n:>4} | {lines[n - 1][:200]}"
+            for n in range(max(1, line - 2), min(len(lines), line + 2) + 1)]
+    return secrets.mask("\n".join(rows), hidden)
 
 
 def profile(directory, files):
@@ -79,7 +74,6 @@ def inspect(directory, files):
         lines = contents[hit.file].splitlines()
         if hit.line > len(lines):
             raise ValueError('검사 근거 줄이 파일 범위 밖입니다.')
-        hit.evidence = masked_line(lines[hit.line - 1])
         hit.identity = code_identity(contents[hit.file], hit.line, hit.file.endswith('.py'))
     route_rows, settings = [], []
     for name, content in contents.items():
@@ -93,6 +87,13 @@ def inspect(directory, files):
                 ast.parse(content)
             except (SyntaxError, ValueError):
                 partial.append(name)
+    found = {}
+    for hit in raw:
+        if getattr(hit, 'secret', None):
+            found.setdefault(hit.file, set()).add(hit.secret)
+    for hit in raw:
+        if hit.file in contents:
+            hit.evidence = excerpt(contents[hit.file], hit.line, found.get(hit.file, ()))
     for entry in getattr(files, 'sensitive_files', []):
         raw.append(RawHit('secrets', 'vs-secret-file', entry['path'], 1, 'CWE-540', ['CI-05', 'V-01'],
             '민감 파일이 Git HEAD에 포함됨', '실제 자격증명이면 교체하고 추적을 해제하세요. .gitignore 추가만으로 과거 커밋에서 삭제되지 않습니다.',

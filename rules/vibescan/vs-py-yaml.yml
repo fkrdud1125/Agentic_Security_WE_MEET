@@ -16,7 +16,9 @@
           "title_ko": "안전하지 않은 YAML 역직렬화",
           "remediation_ko": "yaml.safe_load를 사용하세요.",
           "severity": "High",
-          "confidence": "Potential"
+          "confidence": "Potential",
+          "impact_ko": "yaml.load에 전체 Loader를 쓰면 YAML 안의 태그로 파이썬 객체를 만들고 코드를 실행할 수 있습니다. 외부에서 받은 YAML이라면 서버가 장악될 수 있습니다.",
+          "fix_example": "-data = yaml.load(text, Loader=yaml.Loader)\n+data = yaml.safe_load(text)"
         }
       },
       "pattern-either": [
