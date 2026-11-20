@@ -392,7 +392,7 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
         response.headers.update({
             "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
             "X-Content-Type-Options": "nosniff",
-            "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; "
+            "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; "
                                        "connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
         })
         return response
@@ -422,9 +422,10 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
     def index():
         return FileResponse(ASSETS / "index.html")
 
-    @app.get("/assets/{name}")
+    @app.get("/assets/{name:path}")
     def asset(name: str):
-        if name not in ("dashboard.css", "dashboard.js"):
+        if name not in ("dashboard.css", "dashboard.js", "theme.js",
+                        "fonts/PretendardVariable.woff2", "fonts/OFL.txt"):
             raise HTTPException(404)
         return FileResponse(ASSETS / name)
 
@@ -447,7 +448,8 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
                 if not cached or cached[0] != key:
                     try:
                         data = read_result(folder.name)
-                        cached = key, {k: data[k] for k in ("scan_id", "repo", "commit", "scanned_at", "risk_score")}
+                        cached = key, {k: data[k] for k in ("scan_id", "repo", "commit", "scanned_at",
+                                                          "risk_score", "summary", "trigger")}
                     except HTTPException:
                         cached = key, None
                 seen[folder.name] = cached
@@ -489,3 +491,4 @@ def serve(results: Path):
             server.run(sockets=[sock])
         finally:
             timer.cancel()
+

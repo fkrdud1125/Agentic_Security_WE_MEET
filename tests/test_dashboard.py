@@ -50,6 +50,8 @@ class DashboardTests(unittest.TestCase):
         listing = self.client.get("/api/scans", headers=self.headers).json()
         self.assertEqual([s["scan_id"] for s in listing["scans"]], ["scan-2", "scan-1"])
         self.assertNotIn("findings", listing["scans"][0])
+        self.assertEqual(listing["scans"][0]["summary"]["High"], 1)
+        self.assertEqual(listing["scans"][0]["trigger"], "manual")
         response = self.client.get("/api/scans/scan-1", headers=self.headers)
         self.assertEqual(response.status_code, 200)
         detail = response.json()
@@ -76,8 +78,18 @@ class DashboardTests(unittest.TestCase):
         self.assertNotIn("PRIVATE-EVIDENCE", page.text)
         self.assertEqual(page.headers["cache-control"], "no-store")
         self.assertIn("frame-ancestors 'none'", page.headers["content-security-policy"])
-        for asset in ("dashboard.js", "dashboard.css"):
+        self.assertIn("font-src 'self'", page.headers["content-security-policy"])
+        self.assertNotIn("'unsafe-inline'", page.headers["content-security-policy"])
+        self.assertLess(page.text.index("/assets/theme.js"), page.text.index("/assets/dashboard.css"))
+        for asset in ("dashboard.js", "dashboard.css", "theme.js", "fonts/PretendardVariable.woff2", "fonts/OFL.txt"):
             self.assertEqual(self.client.get("/assets/" + asset).status_code, 200)
+        font = self.client.get("/assets/fonts/PretendardVariable.woff2")
+        self.assertEqual(font.content[:4], b"wOF2")
+        self.assertGreater(len(font.content), 1_000_000)
+        self.assertIn("SIL OPEN FONT LICENSE", self.client.get("/assets/fonts/OFL.txt").text)
+        for asset in ("fonts/other.woff2", "fonts/../../dashboard.py", "fonts/%2e%2e/dashboard.py",
+                      "theme.js/extra", "index.html", "../pyproject.toml"):
+            self.assertEqual(self.client.get("/assets/" + asset).status_code, 404)
         self.assertEqual(self.client.get("/assets/dashboard.py").status_code, 404)
         self.assertEqual(self.client.post("/api/scans", headers=self.headers).status_code, 405)
 
@@ -472,3 +484,4 @@ class DashboardTests(unittest.TestCase):
         job = self.wait_scan()
         self.assertEqual(job["state"], "failed")
         self.assertIn("원본 폴더", job["message"])
+

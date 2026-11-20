@@ -1,81 +1,83 @@
 <!doctype html>
 <html lang="ko">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>VibeScan · 보안 진단</title>
-  <link rel="stylesheet" href="/assets/dashboard.css">
-  <script defer src="/assets/dashboard.js"></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VibeScan · 보안 진단</title>
+<script src="/assets/theme.js"></script>
+<link rel="stylesheet" href="/assets/dashboard.css">
+<script defer src="/assets/dashboard.js"></script>
 </head>
 <body>
-  <aside>
-    <a class="brand" href="/">V<span>▰</span> VibeScan</a>
-    <p class="eyebrow">LOCAL SECURITY WORKSPACE</p>
-    <div class="nav-current">◈ &nbsp; 진단 결과</div>
-    <div class="aside-note"><span class="dot"></span> 내 PC에서 실행 중<br>소스는 읽기 전용으로 검사합니다.</div>
-  </aside>
-  <main>
-    <header><div><p class="eyebrow">SECURITY OVERVIEW</p><h1>코드를 이해하고,<br class="mobile-only"> 더 안전하게.</h1>
-      <p class="muted">발견된 문제의 근거부터 수정 방법까지 한곳에서 확인하세요.</p></div>
-      <button id="refresh" type="button">결과 새로고침 ↻</button></header>
-    <p id="message" role="status" aria-live="polite">저장된 진단 결과를 불러오는 중입니다.</p>
-    <section class="panel repo-connect" aria-labelledby="connect-title">
-      <h2 id="connect-title">레포 연결</h2>
-      <form id="connect-form">
-        <label for="repo-path">프로젝트 폴더 경로 또는 GitHub 주소</label>
-        <div class="connect-row"><input id="repo-path" required maxlength="4096" placeholder="예: C:\projects\my-app 또는 https://github.com/owner/repo" autocomplete="off"><button id="connect" type="submit">레포 연결</button></div>
-      </form>
-      <div class="connect-row scan-controls"><label for="repo-select">연결된 레포</label><select id="repo-select" disabled><option value="">연결된 레포 없음</option></select><button id="scan" type="button" disabled>다시 스캔</button><button id="hook-toggle" type="button" hidden>커밋 후 자동 스캔 켜기</button><button id="notify" type="button" hidden>새 위험 발견 알림 받기</button></div>
-      <div class="connect-row auth-row"><p id="auth-status" role="status" aria-live="polite">ChatGPT 연결 상태를 확인하는 중입니다.</p><button id="login" type="button" hidden>ChatGPT로 로그인</button><button id="logout" type="button" hidden>로그아웃</button></div>
-      <label class="model-option"><input id="use-model" type="checkbox" disabled> ChatGPT 분석 사용 (로그인 필요)</label>
-      <label class="model-option"><input id="background-llm" type="checkbox" disabled> 커밋 후 자동 스캔에서도 ChatGPT 검토 사용 (새로 생긴 High 이상만 · 기본 꺼짐)</label>
-      <p class="muted">현재 HEAD의 전체 정적 검사입니다. 미커밋 변경은 제외합니다. GitHub 주소로 연결한 레포는 스캔 전에 최신 커밋을 가져옵니다. Git 저장소가 아닌 일반 폴더는 스캔할 때마다 현재 파일을 스냅샷으로 기록해 검사하며, 폴더 자체는 바꾸지 않습니다.<br>커밋 후 자동 스캔을 켜면 이 레포에서 커밋할 때마다 백그라운드에서 정적 검사가 실행되고, 결과가 이 화면에 자동으로 나타납니다.<br>ChatGPT 분석을 선택하면 비밀값을 가린 코드 일부를 OpenAI로 보내며, 내 ChatGPT 구독 사용량이 차감됩니다.</p>
-      <p id="job-message" role="status" aria-live="polite"></p>
-      <div id="progress" class="progress" hidden><p id="progress-title"></p><ol id="progress-steps"></ol><ul id="activity" class="muted"></ul></div>
-    </section>
-    <section class="panel selector">
-      <label for="scan-select">스캔 이력</label><select id="scan-select" disabled><option>결과를 불러오는 중</option></select>
-      <p id="results-path" class="muted"></p>
-    </section>
-    <section id="empty" class="panel empty" hidden>
-      <span class="empty-icon">◇</span><h2>첫 진단 결과를 기다리고 있어요</h2>
-      <p>위에서 로컬 레포를 연결하고 ‘다시 스캔’을 눌러주세요.</p>
-      <p class="muted">CLI의 <code>vibescan scan "저장소 경로" --offline</code>도 사용할 수 있습니다.<br>다른 출력 폴더는 <code>vibescan dashboard --results "출력 폴더"</code>로 열 수 있습니다.</p>
+<aside class="sidebar" aria-label="프로젝트 탐색">
+  <a class="brand" href="/" aria-label="VibeScan 홈"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4 7h7l5 11L21 7h7L16 30Z"/><path class="brand-cut" d="M4 2h24v3H4z"/></svg>VibeScan<span class="brand-period">.</span></a>
+  <div class="nav-heading"><span>프로젝트</span><span id="project-count">00</span></div>
+  <nav id="projects" aria-label="프로젝트 목록"></nav>
+  <button id="add-project" class="add-project" type="button"><span aria-hidden="true">＋</span> 프로젝트 추가</button>
+  <div class="sidebar-bottom">
+    <div class="local-state"><span class="status-dot"></span>내 PC에서 실행 중</div>
+    <button id="auth-chip" class="account-chip" type="button"><span class="account-icon" aria-hidden="true">◎</span><span id="auth-label">ChatGPT 확인 중</span><span aria-hidden="true">↗</span></button>
+    <button id="settings-open" class="settings-link" type="button"><span aria-hidden="true">⚙</span> 설정 <span class="keycap" aria-hidden="true">/</span></button>
+  </div>
+</aside>
+<main id="workspace">
+  <header class="topbar">
+    <div class="project-heading"><div class="project-kicker">프로젝트 보안</div><h1 id="repo-name">진단 대시보드</h1><div class="project-meta"><span id="repo-meta">프로젝트를 연결해 시작하세요</span><span id="analysis-badge" class="analysis-badge" hidden></span></div></div>
+    <div class="toolbar">
+      <label class="history-control"><span>스캔 기록</span><select id="scan-select" aria-label="스캔 기록" disabled><option value="">기록 없음</option></select></label>
+      <button id="download" class="secondary" type="button" disabled>보고서 <span aria-hidden="true">↓</span></button>
+      <div id="scan-controls" class="split-wrap"><div class="split-button"><button id="scan" class="primary" type="button" disabled>↗ 지금 스캔</button><button id="scan-menu-toggle" class="primary split-toggle" type="button" aria-label="스캔 방식 선택" aria-expanded="false" aria-controls="scan-menu">⌄</button></div>
+        <div id="scan-menu" class="scan-menu" hidden><button id="mode-local" type="button"><strong>빠른 검사</strong><span>로컬 규칙으로 검사 · 기본</span></button><button id="mode-ai" type="button" disabled><strong>AI 심층 분석</strong><span>구독 사용량 차감 · 비밀값 가린 코드 일부 전송</span></button><button id="connect-ai" class="text-link" type="button">ChatGPT 연결하기 →</button></div>
+      </div>
+    </div>
+    <div id="progress" class="progress" hidden><div class="progress-heading"><strong id="progress-title"></strong><span class="pulse-dot" aria-hidden="true"></span></div><ol id="progress-steps"></ol><details><summary>활동 로그</summary><ul id="activity"></ul></details></div>
+  </header>
+  <div class="main-content">
+    <section id="empty" class="onboarding" hidden aria-labelledby="empty-title">
+      <div class="onboarding-mark" aria-hidden="true">↗</div><p class="section-label">첫 번째 진단</p><h2 id="empty-title">프로젝트의 보안 상태를<br>한눈에 확인하세요.</h2><p id="empty-description" class="muted">코드에서 발견한 문제와 근거, 수정 방법을 한곳에 모읍니다.</p>
+      <ol class="onboarding-steps"><li><span id="step-project" class="step-number">01</span><button id="onboard-add" class="ghost" type="button">프로젝트 추가 →</button><p>로컬 폴더 또는 GitHub 주소</p></li><li><span id="step-scan" class="step-number">02</span><button id="onboard-scan" class="ghost" type="button" disabled>첫 스캔 실행 →</button><p>빠른 검사로 먼저 확인</p></li><li><span id="step-auth" class="step-number">03</span><button id="onboard-auth" class="ghost" type="button">ChatGPT 연결 ↗</button><p>선택 · AI로 분석과 수정안 보강</p></li></ol>
+      <details class="cli-help"><summary>터미널에서 시작하기</summary><code>vibescan scan "프로젝트 경로" --offline</code><p>다른 결과 폴더: <code>vibescan dashboard --results "출력 폴더"</code></p></details>
     </section>
     <div id="result" hidden>
-      <section class="repo-heading"><div><h2 id="repo-name"></h2><p id="repo-meta" class="muted"></p></div>
-        <button id="download" type="button">보고서 다운로드 ↓</button></section>
-      <section class="metrics" aria-label="진단 요약">
-        <article class="panel score"><span>위험 점수</span><div><strong id="risk"></strong><span> / 100</span></div><small>열린 발견의 가중 합계 · 안전 보증 아님</small>
-          <svg id="risk-trend" class="sparkline" viewBox="0 0 120 36" role="img"></svg><small id="risk-trend-note"></small></article>
-        <article class="panel"><span>검토할 발견</span><strong id="total" class="metric"></strong><small id="dismissed"></small></article>
-        <article class="panel distribution"><span>심각도 분포</span><div id="severity-bars"></div></article>
-        <article class="panel"><span>커밋 변화</span><strong id="delta" class="delta"></strong><small id="delta-note"></small></article>
+      <button id="risk-alert" class="risk-alert" type="button" hidden><span class="alert-symbol" aria-hidden="true">!</span><span id="risk-alert-text"></span><span class="alert-action">확인하기 →</span></button>
+      <section class="overview" aria-label="진단 요약">
+        <article class="security-card"><div class="card-heading"><h2>보안 상태</h2><span class="tooltip" tabindex="0" aria-label="점수 계산 방식" title="열린 발견 가중 합계(치명 40·높음 20·보통 10·낮음 3), 최대 100 · 안전 보증 아님">ⓘ</span></div><div class="risk-line"><strong id="risk-grade">—</strong><div class="score-number"><span id="risk">—</span><span>/ 100</span></div></div><div class="risk-caption">열린 발견 기준 · 안전 보증 아님</div><svg id="risk-trend" class="sparkline" viewBox="0 0 360 64" role="img"></svg><div class="trend-footer"><span id="risk-trend-note"></span><span id="delta"></span></div></article>
+        <article class="distribution-card"><div class="card-heading"><h2>심각도 분포</h2><span class="muted">선택해 발견 좁히기</span></div><div id="severity-bars" class="stacked-bar" role="img" aria-label="열린 발견 심각도 분포"></div><div id="severity-chips" class="severity-chips"></div><details class="coverage-details"><summary id="coverage-summary">검사 범위 확인</summary><ul id="coverage"></ul><ul id="limitations" class="muted"></ul><div class="detected-profile"><h3>감지한 앱 정보</h3><p id="profile"></p></div></details></article>
       </section>
-      <section class="panel coverage"><h2>이번 진단이 확인한 범위</h2><p id="analysis-note"></p><p id="profile" class="muted"></p>
-        <ul id="coverage"></ul><ul id="limitations" class="muted"></ul></section>
-      <section class="panel"><div class="section-heading"><h2>먼저 확인하세요</h2><span class="muted">열린 발견 중 우선순위 3건</span></div><div id="priorities"></div></section>
-      <section class="panel findings-panel">
-        <div class="section-heading"><h2>발견 목록 <span id="filtered-count" class="muted"></span></h2></div>
-        <div class="filters">
-          <label>심각도<select id="severity-filter"><option value="">전체 심각도</option><option>Critical</option><option>High</option><option>Medium</option><option>Low</option><option>Info</option></select></label>
-          <label>상태<select id="status-filter"><option value="open">열림</option><option value="">전체 상태</option><option value="dismissed">오탐 후보</option><option value="fixed">수정됨</option></select></label>
-          <label class="search">파일·제목·유형<input id="search" type="search" placeholder="파일명, SQL, CWE-89…"></label>
-        </div>
-        <div class="table-scroll"><table><thead><tr><th>심각도</th><th>발견 / 위치</th><th>상태</th><th>신뢰도</th><th>변화</th></tr></thead><tbody id="findings"></tbody></table></div>
-        <p id="no-findings" class="muted" hidden>조건에 맞는 발견이 없습니다. 미검사 항목은 위의 진단 범위에서 확인하세요.</p>
+      <section class="findings-panel" aria-labelledby="findings-title">
+        <div class="findings-heading"><h2 id="findings-title">발견 <span id="filtered-count"></span></h2><label class="search"><span class="sr-only">파일·제목·CWE 검색</span><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="파일, 제목, CWE 검색" autocomplete="off"><kbd>/</kbd></label></div>
+        <div class="filter-line"><div id="status-tabs" class="tabs" role="tablist" aria-label="발견 상태"></div><button id="new-filter" class="filter-chip" type="button" aria-pressed="false" hidden>새로 발견 ×</button><button id="clear-filters" class="ghost" type="button" hidden>필터 초기화</button></div>
+        <div class="list-heading" aria-hidden="true"><span>심각도</span><span>발견 내용</span><span>파일 위치</span><span></span></div>
+        <div id="findings" role="tabpanel" aria-label="발견 목록"></div>
+        <div id="no-findings" class="no-findings" hidden><span aria-hidden="true">◎</span><h3>조건에 맞는 발견이 없습니다</h3><p>필터를 바꾸거나 검사 범위의 미검사 항목을 확인하세요.</p><button id="reset-empty" class="secondary" type="button">필터 초기화</button></div>
+        <div class="list-footer"><span>근거를 확인한 뒤 수정을 결정하세요.</span><span>발견 선택 <kbd>↵</kbd> · 이전 / 다음 <kbd>↑</kbd><kbd>↓</kbd></span></div>
       </section>
     </div>
-    <footer>VibeScan · 로컬 정적 진단 <span>자동 수정 없이, 근거를 확인하고 결정하세요.</span></footer>
-  </main>
-  <dialog id="detail" aria-labelledby="detail-title">
-    <div class="section-heading"><span id="detail-badge"></span><button id="close-detail" type="button" aria-label="발견 상세 닫기">닫기 ×</button></div>
-    <h2 id="detail-title"></h2><p id="detail-meta" class="muted"></p>
-    <h3>발견 근거</h3><pre id="evidence"></pre><p id="how-found" class="muted"></p>
-    <h3>영향</h3><p id="impact"></p><h3>판정 근거</h3><p id="triage"></p>
-    <h3>수정 방법</h3><p id="remediation"></p>
-    <div class="section-heading"><h3>수정안</h3><button id="copy-diff" type="button">수정안 복사</button></div>
-    <p id="fix-note" class="notice"></p><pre id="fix-diff"></pre><p id="copy-status" role="status"></p>
-  </dialog>
+  </div>
+</main>
+<div id="toast" class="toast" hidden><span id="message" role="status" aria-live="polite"></span><button id="retry" class="ghost" type="button" hidden>다시 시도</button><button id="dismiss-toast" class="ghost" type="button" aria-label="알림 닫기">×</button></div>
+<dialog id="project-dialog" class="project-dialog" aria-labelledby="connect-title">
+  <div class="dialog-heading"><span class="section-label">새 프로젝트</span><button id="close-project" class="icon-button" type="button" aria-label="프로젝트 추가 닫기">×</button></div><h2 id="connect-title">어떤 프로젝트를 검사할까요?</h2>
+  <form id="connect-form"><label for="repo-path">프로젝트 폴더 경로 또는 GitHub 주소</label><input id="repo-path" required maxlength="4096" placeholder="C:\projects\my-app 또는 https://github.com/owner/repo" autocomplete="off"><div class="connect-notes"><p>Git 저장소는 현재 커밋을 검사하며 미커밋 변경은 제외합니다.</p><p>GitHub 주소는 이 PC에 복제하고, 스캔 전 최신 커밋을 가져옵니다.</p><p>일반 폴더는 원본을 바꾸지 않고 현재 파일의 스냅샷을 검사합니다.</p></div><button id="connect" class="primary" type="submit">프로젝트 연결 →</button></form>
+  <div id="connected-next" hidden><p id="connected-name"></p><button id="first-scan" class="primary" type="button">지금 첫 스캔 실행 →</button></div>
+</dialog>
+<section id="detail" class="drawer finding-drawer" role="dialog" aria-modal="true" aria-labelledby="detail-title" hidden tabindex="-1">
+  <div class="drawer-toolbar"><span class="section-label">발견 상세</span><div><button id="previous-finding" class="icon-button" type="button" aria-label="이전 발견">↑</button><button id="next-finding" class="icon-button" type="button" aria-label="다음 발견">↓</button><button id="close-detail" class="icon-button" type="button" aria-label="발견 상세 닫기">×</button></div></div>
+  <div class="drawer-body"><div id="detail-badge" class="detail-badges"></div><h2 id="detail-title"></h2><p id="detail-location" class="mono muted"></p>
+    <section><h3><span>01</span> 무엇이 문제인가요</h3><p id="impact"></p></section><section><h3><span>02</span> 근거 코드</h3><pre id="evidence"></pre></section><section><h3><span>03</span> 어떻게 고치나요</h3><p id="remediation"></p></section>
+    <section><div class="section-heading"><h3><span>04</span> 수정안</h3><button id="copy-diff" class="secondary" type="button">수정안 복사</button></div><pre id="fix-diff"></pre><p id="fix-note" class="notice"></p><button id="ai-fix-hint" class="text-link" type="button" hidden>AI 심층 분석으로 수정안 받기 →</button></section>
+    <details id="decision-details" class="decision"><summary>판정 정보</summary><p id="detail-meta"></p><h4>탐지 방식</h4><p id="how-found"></p><h4>모델 판정 근거</h4><p id="triage"></p><p id="severity-adjustment"></p></details>
+  </div>
+</section>
+<div id="settings-backdrop" class="drawer-backdrop" hidden></div>
+<section id="settings" class="drawer settings-drawer" role="dialog" aria-modal="true" aria-labelledby="settings-title" hidden tabindex="-1">
+  <div class="drawer-toolbar"><h2 id="settings-title">설정</h2><button id="close-settings" class="icon-button" type="button" aria-label="설정 닫기">×</button></div>
+  <div class="drawer-body"><section id="account-section"><p class="section-label">01 / 계정</p><h3>ChatGPT 연결</h3><p id="account-state"></p><div class="button-row"><button id="login" class="primary" type="button">ChatGPT로 로그인</button><button id="logout" class="secondary" type="button" hidden>로그아웃</button></div><p class="muted">AI 분석은 비밀값을 가린 코드 일부를 전송하며 구독 사용량이 차감됩니다. 사용량은 ChatGPT 설정에서 관리하세요.</p><p id="register-hint" class="notice" hidden>먼저 터미널에서 <code>python -m vibescan.register</code>를 실행해 이 PC를 등록하세요.</p></section>
+    <section><p class="section-label">02 / 자동 감시</p><h3 id="watch-project">프로젝트 선택 필요</h3><label class="toggle-row"><span>커밋 후 자동 스캔</span><input id="hook-toggle" type="checkbox" role="switch" disabled></label><p id="hook-note" class="muted"></p><label class="toggle-row"><span>자동 스캔에서 AI 검토</span><input id="background-llm" type="checkbox" role="switch" disabled></label><p class="muted">전체 프로젝트 공통 · 새로 생긴 치명·높음 발견만 검토합니다.</p><p id="notification-note" class="muted"></p></section>
+    <section><p class="section-label">03 / 화면</p><h3>테마</h3><div id="theme-options" class="segmented" role="group" aria-label="화면 테마"><button type="button" data-theme="system">시스템</button><button type="button" data-theme="light">라이트</button><button type="button" data-theme="dark">다크</button></div></section>
+    <section><p class="section-label">04 / 데이터</p><h3>결과 폴더</h3><code id="results-path" class="path-block"></code><button id="copy-path" class="secondary" type="button">경로 복사</button><details class="cli-help"><summary>CLI 사용법</summary><code>vibescan scan "프로젝트 경로" --offline</code><p><code>vibescan dashboard --results "출력 폴더"</code></p></details></section>
+  </div>
+</section>
 </body>
 </html>
+

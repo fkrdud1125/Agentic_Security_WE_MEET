@@ -20,8 +20,9 @@ vibescan = "vibescan.cli:main"
 packages = ["scanner", "scanner.detectors", "vibescan"]
 
 [tool.setuptools.package-data]
-vibescan = ["web/*.html", "web/*.css", "web/*.js"]
+vibescan = ["web/*.html", "web/*.css", "web/*.js", "web/fonts/*.woff2", "web/fonts/OFL.txt"]
 
 [tool.setuptools.data-files]
 "share/vibescan" = ["rules/catalog/kisa-2026-web.yml"]
 "share/vibescan/rules" = ["rules/vibescan/*.yml"]
+
