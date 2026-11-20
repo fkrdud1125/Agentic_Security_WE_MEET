@@ -48,6 +48,7 @@ function harness({blockedStorage = false, hash = ""} = {}) {
     }
     querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
     focus() { document.activeElement = this; }
+    select() { this.selected = true; }
     click() { this.focus(); return this.handlers.click?.({target: this, preventDefault() {}}); }
     contains(target) { return this === target || this.querySelectorAll("*").includes(target); }
     showModal() { this.open = true; } close() { this.open = false; }
@@ -72,8 +73,7 @@ function harness({blockedStorage = false, hash = ""} = {}) {
     createElement: tag => new Element(tag), createElementNS: (_, tag) => new Element(tag),
     querySelector: selector => selector === ".sidebar" ? sidebar : null, handlers: {},
     addEventListener(type, fn) { this.handlers[type] = fn; }};
-  for (const id of ["detail", "settings"]) { const content = new Element(); content.className = "drawer-body"; get(id).append(content); }
-  for (const theme of ["system", "light", "dark"]) { const button = new Element("button"); button.dataset.theme = theme; get("theme-options").append(button); }
+  for (const id of ["settings"]) { const content = new Element(); content.className = "drawer-body"; get(id).append(content); }
   const storage = new Map([["vibescan-token", "test-ticket"]]), requests = [], notices = [], copies = [], downloads = [], replaced = [];
   const store = {getItem(key) { if (blockedStorage) throw Error("blocked"); return storage.get(key); },
     setItem(key, value) { if (blockedStorage) throw Error("blocked"); storage.set(key, value); }};
@@ -116,54 +116,64 @@ async function main() {
   ]);
   h.seed(data);
   assert.equal(get("risk-grade").textContent, "위험"); // dismissed Critical is excluded
-  assert.equal(get("findings").children.length, 3);
-  assert.equal(get("findings").children[0].dataset.findingId, "new");
-  assert.equal(get("tab-open").textContent, "열림3");
-  assert.equal(get("tab-dismissed").textContent, "오탐 후보1");
-  assert.equal(get("tab-fixed").textContent, "해결됨1");
-  assert.equal(get("risk-alert").hidden, false);
-  await get("tab-fixed").click();
   assert.equal(get("findings").children.length, 1);
-  assert.equal(get("findings").children[0].dataset.findingId, "fixed");
-  run("resetFilters()");
-  const chip = level => get("severity-chips").children.find(c => c.dataset.severity === level);
-  await chip("High").click(); assert.equal(get("findings").children.length, 1);
-  await chip("Medium").click(); assert.equal(get("findings").children.length, 2);
-  get("search").value = "CWE-89"; run("filterFindings()"); assert.equal(get("findings").children.length, 2);
-  get("search").value = "missing"; run("filterFindings()"); assert.equal(get("no-findings").hidden, false);
-  assert.equal(get("no-findings-title").textContent, "조건에 맞는 발견이 없습니다");
-  get("search").value = ""; run("filterFindings()"); assert.equal(get("findings").children.length, 2);  // chips stay
-  run("resetFilters()"); assert.equal(get("findings").children.length, 3);  // what a project switch does
-  await get("risk-alert").click(); assert.equal(get("findings").children.length, 1);
-  assert.equal(get("new-filter").hidden, false);
-  await get("new-filter").click(); assert.equal(get("findings").children.length, 3);
-  for (const [level, expected] of [["Critical", "심각"], ["High", "위험"], ["Medium", "주의"], ["Low", "낮음"], ["Info", "낮음"]]) {
-    h.context.input = [finding("x", level)]; assert.equal(run("riskGrade(input).label"), expected);
+  assert.match(get("verdict-title").textContent, /1가지/);
+  assert.match(get("resolution").textContent, /2가지 중 1가지/);
+  assert.equal(get("coverage-section").hidden, true);
+  assert.equal(get("jump-findings").getAttribute("aria-pressed"), "true");
+  for (const [section, size] of [["later", 2], ["fixed", 1], ["dismissed", 1], ["coverage", 0]]) {
+    const jump = get("jump-" + section);
+    assert.equal(jump.hidden, false);
+    await jump.click();
+    assert.equal(get("findings").children.length, size);
+    assert.equal(get("findings").hidden, section === "coverage");
+    assert.equal(get("coverage-section").hidden, section !== "coverage");
+    assert.equal(jump.getAttribute("aria-pressed"), "true");
+    assert.equal(h.document.activeElement, get("findings-label"));
   }
-  h.context.input = [finding("x", "Critical", {status: "fixed"})];
-  assert.equal(run("riskGrade(input).label"), "발견 없음");
-  h.seed(sample("clean")); assert.equal(get("risk-alert").hidden, true);
-  assert.equal(get("risk-grade").textContent, "발견 없음");
-  console.log("Grades, Korean labels, tabs, multi-select severity, banner and search: OK");
+  await get("jump-findings").click();
+  assert.equal(h.document.activeElement, get("findings-label"));
+  get("search").value = "missing"; run("filterFindings()");
+  assert.equal(get("jump-later").hidden, true);
+  assert.match(get("findings").textContent, /검색 조건/);
+  assert.equal(get("coverage-section").hidden, true);
+  run("resetFilters()");
+  h.seed({...sample("clean"), baseline_commit: null});
+  assert.match(get("verdict-title").textContent, /열린 문제가 없습니다/);
+  assert.match(get("delta").textContent, /첫 검사/);
+  h.seed(sample("later", "C:/a", [finding("m", "Medium")]));
+  assert.match(get("verdict-title").textContent, /우선순위가 낮은 1가지/);
 
-  const hostile = finding("hostile", "High", {title: '<img src=x onerror=alert(1)>',
-    evidence: "<script>alert(1)</script>", fix_diff: "+<img onerror=alert(1)>\n-unsafe\n context",
+  const hostile = finding("hostile", "High", {rule_id: "secret", title: "<img onerror=alert(1)>",
+    evidence: "private literal", remediation_ko: "private literal", fix_diff: "+private literal",
     original_severity: "Critical", change: "new"});
-  h.seed(sample("unsafe", "C:/a", [hostile, finding("second")]));
-  await get("findings").children[0].click();
-  assert.equal(get("detail-title").textContent, hostile.title);
-  assert.equal(get("evidence").textContent, hostile.evidence);
-  assert.equal(get("fix-diff").children[0].textContent, "+<img onerror=alert(1)>");
-  assert.equal(get("fix-diff").children[0].className, "diff-line diff-add");
-  assert.match(get("detail-meta").textContent, /가능성 높음/);
-  assert.match(get("severity-adjustment").textContent, /치명 → 높음/);
-  assert.equal(get("workspace").inert, true);
-  await get("copy-diff").click(); assert.equal(h.copies[0], hostile.fix_diff);
-  await get("next-finding").click(); assert.equal(get("detail-title").textContent, "문제 second");
-  h.document.handlers.keydown({key: "Escape", preventDefault() {}});
-  assert.equal(get("detail").hidden, true); assert.equal(get("workspace").inert, false);
-  assert.equal(h.document.activeElement.dataset.findingId, "hostile");
-  console.log("Hostile code stays text, diff coloring, copying, drawer navigation and focus restoration: OK");
+  h.seed(sample("mixed", "C:/a", [hostile, finding("older", "Low", {rule_id: "secret",location:{file:"b.py",line:2}}),
+    finding("closed", "Critical", {rule_id:"secret", change:"fixed", location:{file:"old.py",line:1}})]));
+  const card = get("findings").children[0];
+  assert.match(card.textContent, /2곳/);
+  assert.equal(get("jump-fixed").hidden, true);
+  const copy = card.querySelector("button");
+  await copy.click();
+  assert.match(h.copies[0], /app.py:12/); assert.match(h.copies[0], /b.py:2/);
+  assert.doesNotMatch(h.copies[0], /private literal|onerror|old.py/);
+  const clipboard = h.context.navigator.clipboard;
+  h.context.navigator.clipboard = null;
+  await copy.click();
+  const manual = h.document.activeElement;
+  assert.equal(manual.tagName, "TEXTAREA"); assert.equal(manual.hidden, false);
+  assert.equal(manual.value, h.copies[0]); assert.equal(manual.selected, true);
+  h.context.navigator.clipboard = clipboard;
+  const detail = card.querySelector(".task-detail");
+  detail.open = true; detail.handlers.toggle();
+  const loc = detail.querySelector(".location-detail"); loc.handlers.toggle();
+  assert.match(loc.textContent, /private literal/);
+  assert.match(loc.textContent, /치명 → 높음/);
+  assert.match(loc.textContent, /가능성 높음/);
+  await loc.querySelector("button").click(); assert.equal(h.copies[1], hostile.fix_diff);
+  const legacy = finding("legacy");
+  h.seed(sample("legacy", "C:/a", [legacy, {...legacy, id:"other", location:{file:"other.py", line:2}}]));
+  assert.equal(get("findings").children.length, 1);
+  console.log("Grouped tasks, partial resolution, legacy reports, inline evidence and prompt privacy: OK");
 
   const a1 = sample("a1"), a2 = {...sample("a2"), scanned_at: "2026-11-21T00:00:00Z", trigger: "git-hook"};
   const b = sample("b1", "C:/b");
@@ -196,15 +206,15 @@ async function main() {
   assert.equal(race.run("result.repo.path"), "C:/b");
   console.log("Stale scan response ignored after project switch: OK");
 
-  h.context.scans = [a1, b, a2]; run("scanList=scans;");
-  run('renderTrend({...scanList[2],repo:{path:"C:/a"}})');
-  assert.equal(get("risk-trend").children.filter(c => c.tagName === "CIRCLE").length, 4);
-  assert.match(get("risk-trend-note").textContent, /최근 2회/);
-  run("renderTrend(scanList[0])"); assert.equal(get("risk-trend").hidden, true);
+  await run('chooseProject("C:/a", "a1")');
+  assert.equal(get("history-notice").hidden, false);
+  run('repoList.push({name:"a",path:"D:/a",hook:false}); renderProjects()');
+  assert.match(get("projects").textContent, /D:\/a/);
+  assert.match(get("projects").textContent, /C:\/a/);
   h.context.fresh = sample("alert", "C:/a", [finding("f", "High", {change: "new"})]);
   assert.equal(run("alertNewRisks(fresh)"), true); assert.equal(run("alertNewRisks(fresh)"), false);
   assert.equal(h.notices.length, 1); assert.match(h.notices[0], /치명·높음/);
-  console.log("Per-project historical trend and deduplicated new-risk notification: OK");
+  console.log("Historical selection and deduplicated new-risk notification: OK");
 
   const scan = harness(), saved = sample("saved", "C:/a", [finding("f")]);
   scan.context.saved = saved;
@@ -243,12 +253,9 @@ async function main() {
   const blocked = harness({blockedStorage:true,hash:"#fresh-ticket"});
   assert.equal(blocked.run("token"), "fresh-ticket");
   assert.equal(blocked.replaced[0][2], "/");
-  blocked.run('applyTheme("dark")'); assert.equal(blocked.document.documentElement.dataset.theme, "dark");
-  blocked.run('applyTheme("system")'); assert.equal(blocked.document.documentElement.dataset.theme, undefined);
   assert.equal((html.match(/aria-live=/g) || []).length, 1);
   assert.doesNotMatch(source, /\.innerHTML\s*=/);
-  assert(html.indexOf("/assets/theme.js") < html.indexOf("/assets/dashboard.css"));
-  console.log("First hook result, unavailable storage, ticket hash isolation, themes and single live region: OK");
+  console.log("First hook result, unavailable storage, ticket hash isolation, single live region: OK");
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
 

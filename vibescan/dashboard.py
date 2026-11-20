@@ -424,7 +424,7 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
 
     @app.get("/assets/{name:path}")
     def asset(name: str):
-        if name not in ("dashboard.css", "dashboard.js", "theme.js",
+        if name not in ("dashboard.css", "dashboard.js",
                         "fonts/PretendardVariable.woff2", "fonts/OFL.txt"):
             raise HTTPException(404)
         return FileResponse(ASSETS / name)

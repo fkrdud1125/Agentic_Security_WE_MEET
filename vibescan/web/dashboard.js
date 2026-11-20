@@ -5,7 +5,6 @@ const levels = ["Critical", "High", "Medium", "Low", "Info"];
 const severityLabels = {Critical: "치명", High: "높음", Medium: "보통", Low: "낮음", Info: "정보"};
 const confidenceLabels = {Confirmed: "확인됨", Likely: "가능성 높음", Potential: "잠재적"};
 const statuses = {open: "열림", dismissed: "오탐 후보", fixed: "해결됨"};
-const changes = {new: "새로 발견", existing: "기존", fixed: "해결"};
 const issueHints = {
   limit: "ChatGPT 사용량 한도에 도달했습니다. ChatGPT 설정의 사용량에서 이 앱의 한도를 확인하세요.",
   plan: "ChatGPT Plus/Pro 구독과 구독 사용 승인이 필요합니다.",
@@ -26,14 +25,15 @@ if (location.hash) {
 }
 
 // State
-let result = null, scanList = [], repoList = [], visibleFindings = [], stages = [];
+let result = null, scanList = [], repoList = [], stages = [];
 let selectedProject = stored("localStorage", "vibescan-project");
 let scanMode = stored("localStorage", "vibescan-mode", "local") === "ai" ? "ai" : "local";
-let statusFilter = "open", severityFilter = new Set(), newOnly = false;
+let taskGroups = [], activeSection = "findings";
+const sectionNames = {findings: "지금 확인할 것", later: "다음에 확인할 것", fixed: "이번 검사에서 해결됨", dismissed: "오탐 후보", coverage: "검사 범위"};
 let latestSeen, detailVersion = 0, refreshVersion = 0, jobVersion = 0;
 let scanning = false, connecting = false, hookPending = false, backgroundPending = false;
 let pollTimer = null, authTimer = null, toastTimer = null, loginRequested = false, auth = null;
-let activeDrawer = null, returnFocus = null, detailFinding = null, lastJob = "";
+let activeDrawer = null, returnFocus = null, lastJob = "";
 let retryAction = null, resultsPath = "", latestPollFailed = false;
 const jobIssues = new Map(), notifiedScans = new Set();
 
@@ -49,7 +49,7 @@ function badge(level) {
   return node("span", severityLabels[known], "badge " + known);
 }
 function findingStatus(f) { return f.change === "fixed" ? "fixed" : (f.status || "open"); }
-function locationText(f) { return (f.location?.file || "파일 미확인") + (f.location?.line ? ":" + f.location.line : ""); }
+function locationText(f) { return (f.location?.file || f.location?.endpoint || "위치 미확인") + (f.location?.line ? ":" + f.location.line : ""); }
 function dateText(value) { return new Date(value).toLocaleString("ko-KR", {month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit"}); }
 function message(text, error = false, retry = null) {
   clearTimeout(toastTimer);
@@ -81,8 +81,6 @@ function projects() {
   const combined = new Map(repoList.map(repo => [repo.path, {...repo, connected: true}]));
   for (const scan of scanList) {
     if (!combined.has(scan.repo.path)) combined.set(scan.repo.path, {...scan.repo, connected: false, hook: null});
-    const project = combined.get(scan.repo.path);
-    if (!project.latest || scan.scanned_at > project.latest.scanned_at) project.latest = scan;
   }
   return [...combined.values()];
 }
@@ -90,20 +88,19 @@ function projects() {
 // Project selection: project, history and visible result always move together.
 function renderProjects() {
   const items = projects();
-  $("project-count").textContent = String(items.length).padStart(2, "0");
-  $("projects").replaceChildren(...items.map(project => {
-    const button = node("button", "", "project-button");
-    button.type = "button";
-    button.dataset.path = project.path;
-    button.setAttribute("aria-current", project.path === selectedProject ? "page" : "false");
-    const state = !project.connected ? "결과만 있음 · 스캔하려면 연결 필요" : project.hook ? "자동 감시 켜짐" : "자동 감시 꺼짐";
-    button.title = project.path + " · " + state;
-    const dot = node("span", !project.connected ? "◌" : project.hook ? "●" : "○", "project-dot" + (project.hook ? " watching" : ""));
-    dot.setAttribute("aria-label", state);
-    button.append(dot, node("span", project.name, "project-name"), node("span", project.latest ? project.latest.risk_score : "··", "project-score"));
-    button.addEventListener("click", () => chooseProject(project.path));
-    return button;
+  const select = $("projects");
+  const counts = new Map();
+  for (const project of items) counts.set(project.name, (counts.get(project.name) || 0) + 1);
+  select.replaceChildren(...items.map(project => {
+    const label = counts.get(project.name) > 1 ? project.name + " · " + project.path : project.name;
+    const option = node("option", label + (project.connected ? "" : " · 결과만"));
+    option.value = project.path;
+    option.title = project.path;
+    return option;
   }));
+  if (!items.length) select.append(node("option", "프로젝트 없음"));
+  select.disabled = !items.length;
+  select.value = selectedProject;
 }
 function renderHistory(preferred) {
   const scans = projectScans();
@@ -121,8 +118,7 @@ function renderHistory(preferred) {
   $("scan-select").disabled = !scans.length;
 }
 function resetFilters() {
-  statusFilter = "open"; severityFilter.clear(); newOnly = false; $("search").value = "";
-  if (result) { renderTabs(); renderSeverity(); filterFindings(); }
+  $("search").value = "";
 }
 function emptyState() {
   const project = projects().find(p => p.path === selectedProject);
@@ -157,7 +153,7 @@ async function selectScan() {
   if (!id) { result = null; emptyState(); return; }
   // Old results must not remain actionable while their replacement is loading.
   $("download").disabled = true;
-  if (result?.repo.path !== path) $("result").hidden = true;
+  $("result").hidden = true;
   $("result").setAttribute("aria-busy", "true");
   try {
     const data = await api("/api/scans/" + encodeURIComponent(id));
@@ -204,121 +200,138 @@ async function loadRepos() {
 }
 
 // Result rendering
-function sortedFindings() {
-  return [...(result?.findings || [])].sort((a, b) =>
-    Number(b.change === "new") - Number(a.change === "new") || levels.indexOf(a.severity) - levels.indexOf(b.severity));
-}
 function riskGrade(findings) {
   const highest = levels.find(level => findings.some(f => findingStatus(f) === "open" && f.severity === level));
   return {label: ({Critical: "심각", High: "위험", Medium: "주의", Low: "낮음", Info: "낮음"})[highest] || "발견 없음", level: highest || "Info"};
 }
 function freshRisks(scan) { return scan.findings.filter(f => f.change === "new" && findingStatus(f) === "open" && ["Critical", "High"].includes(f.severity)); }
-function renderTrend(d) {
-  const points = projectScans(d.repo.path).filter(s => new Date(s.scanned_at) <= new Date(d.scanned_at))
-    .sort((a, b) => new Date(a.scanned_at) - new Date(b.scanned_at)).slice(-8);
-  const svg = $("risk-trend");
-  svg.replaceChildren(); svg.hidden = points.length < 2;
-  $("risk-trend-note").textContent = points.length < 2 ? "다음 스캔부터 추이 표시" : `최근 ${points.length}회 · ${points[0].risk_score} → ${d.risk_score}점`;
-  svg.setAttribute("aria-label", points.map(p => `${(p.commit || "커밋 없음").slice(0, 7)} ${p.risk_score}점`).join(", "));
-  if (points.length < 2) return;
-  const shape = (tag, attrs) => {
-    const item = document.createElementNS("http://www.w3.org/2000/svg", tag);
-    for (const [key, value] of Object.entries(attrs)) item.setAttribute(key, String(value));
-    return item;
-  };
-  const xy = points.map((p, i) => [5 + i * 350 / (points.length - 1), 58 - Math.max(0, Math.min(100, p.risk_score)) * .52]);
-  svg.append(shape("line", {class: "grid-line", x1: 0, x2: 360, y1: 58, y2: 58}));
-  svg.append(shape("polygon", {class: "area", points: [[5, 64], ...xy, [355, 64]].map(p => p.join(",")).join(" ")}));
-  svg.append(shape("polyline", {class: "line", points: xy.map(p => p.join(",")).join(" ")}));
-  points.forEach((p, i) => {
-    const [x, y] = xy[i];
-    svg.append(shape("circle", {class: p.scan_id === d.scan_id ? "now" : "dot", cx: x, cy: y, r: 3}));
-    const hit = shape("circle", {class: "hit", cx: x, cy: y, r: 9}), label = shape("title", {});
-    label.textContent = `${(p.commit || "커밋 없음").slice(0, 12)} · ${p.risk_score}점 · ${dateText(p.scanned_at)}`;
-    hit.append(label); svg.append(hit);
-  });
-}
-function renderSeverity() {
-  const summary = result.summary || {};
-  const total = levels.reduce((sum, level) => sum + (summary[level] || 0), 0);
-  $("severity-bars").replaceChildren();
-  $("severity-bars").setAttribute("aria-label", levels.map(l => `${severityLabels[l]} ${summary[l] || 0}건`).join(", "));
-  for (const level of levels) {
-    if (!summary[level]) continue;
-    const segment = node("span", "", "stack-segment " + level);
-    segment.style.flexGrow = String(summary[level] / Math.max(1, total));
-    segment.title = `${severityLabels[level]} ${summary[level]}건`;
-    $("severity-bars").append(segment);
+function groupFindings(findings) {
+  const groups = new Map();
+  for (const f of findings) {
+    const dismissed = findingStatus(f) === "dismissed";
+    const key = JSON.stringify([dismissed, f.rule_id || [f.category || "", f.title]]);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(f);
   }
-  $("severity-chips").replaceChildren(...levels.map(level => {
-    const chip = node("button", "", "severity-chip " + level);
-    chip.type = "button"; chip.dataset.severity = level;
-    chip.setAttribute("aria-pressed", String(severityFilter.has(level)));
-    chip.setAttribute("aria-label", `${severityLabels[level]} ${summary[level] || 0}건 필터`);
-    const name = node("span", "", "chip-name");
-    name.append(node("span", "", "chip-dot"), node("span", severityLabels[level]));
-    chip.append(name, node("strong", summary[level] || 0));
-    chip.addEventListener("click", () => {
-      severityFilter.has(level) ? severityFilter.delete(level) : severityFilter.add(level);
-      renderSeverity(); filterFindings();
-      $("severity-chips").querySelector(`[data-severity="${level}"]`)?.focus();
-    });
-    return chip;
-  }));
+  return [...groups.values()].map(items => {
+    const open = items.filter(f => findingStatus(f) === "open");
+    const active = open.length ? open : items;
+    const level = levels.find(level => active.some(f => f.severity === level)) || "Info";
+    const status = open.length ? "open" : findingStatus(items[0]);
+    const section = status === "open" ? (["Critical", "High"].includes(level) ? "findings" : "later") : status;
+    const locations = [...new Set(active.map(locationText))];
+    return {items, open, locations, level, section, fresh: open.some(f => f.change === "new"),
+      title: active.find(f => f.severity === level)?.title || active[0].title};
+  }).sort((a, b) => Number(b.fresh) - Number(a.fresh) || levels.indexOf(a.level) - levels.indexOf(b.level)
+    || b.locations.length - a.locations.length);
 }
-function renderTabs() {
-  const counts = {open: 0, dismissed: 0, fixed: 0};
-  for (const finding of result.findings) counts[findingStatus(finding)]++;
-  $("status-tabs").replaceChildren(...["open", "dismissed", "fixed", ""].map(status => {
-    const tab = node("button", status ? statuses[status] : "전체", "tab");
-    tab.type = "button"; tab.dataset.status = status;
-    tab.id = "tab-" + (status || "all");
-    tab.setAttribute("role", "tab"); tab.setAttribute("aria-controls", "findings");
-    tab.setAttribute("aria-selected", String(status === statusFilter));
-    tab.tabIndex = status === statusFilter ? 0 : -1;
-    tab.append(node("span", status ? counts[status] : result.findings.length, "tab-count"));
-    tab.addEventListener("click", () => { statusFilter = status; renderTabs(); filterFindings(); $(tab.id).focus(); });
-    tab.addEventListener("keydown", event => {
-      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-      event.preventDefault();
-      const options = ["open", "dismissed", "fixed", ""], index = options.indexOf(statusFilter);
-      statusFilter = event.key === "Home" ? options[0] : event.key === "End" ? "" : options[(index + (event.key === "ArrowRight" ? 1 : 3)) % 4];
-      renderTabs(); filterFindings(); $("tab-" + (statusFilter || "all")).focus();
-    });
-    return tab;
-  }));
-  $("findings").setAttribute("aria-labelledby", "tab-" + (statusFilter || "all"));
+
+function fixPrompt(group, scan) {
+  // Report prose, snippets and diffs can contain literal credentials. Export only locators and identifiers.
+  const files = [...new Set(group.open.filter(f => f.location?.file).map(locationText))];
+  const cwes = [...new Set(group.open.map(f => f.cwe).filter(value => /^CWE-\d+$/i.test(value)))];
+  return [`프로젝트 ${scan.repo.name} · ${scan.repo.branch || "브랜치 미확인"} · ${(scan.commit || "").slice(0, 12)}`,
+    `보안 진단에서 ${severityLabels[group.level]} 등급으로 분류한 위치를 검토해 주세요. ${cwes.join(", ")}`,
+    ...(files.length ? files : ["보고서에 파일 위치가 기록되지 않았습니다."]), "각 위치의 코드와 사용처를 확인하고, 문제가 확인되면 기존 동작을 유지하면서 수정해 주세요.",
+    "비밀값은 출력하지 말고, 변경한 파일과 검증 결과를 알려 주세요."].join("\n");
 }
+
+function locationDetail(f) {
+  const detail = node("details", "", "location-detail");
+  detail.append(node("summary", [locationText(f), severityLabels[f.severity], statuses[findingStatus(f)]].filter(Boolean).join(" · ")));
+  detail.addEventListener("toggle", () => {
+    if (!detail.open || detail.children.length > 1) return;
+    detail.append(node("p", f.impact_ko || "영향 설명 없음"), node("h4", "근거 코드"), node("pre", f.evidence || "기록 없음"),
+      node("h4", "수정 방법"), node("p", f.remediation_ko || "수정 방법 없음"));
+    if (f.fix_diff) {
+      const fix = node("details"), copy = node("button", "수정안 복사", "secondary");
+      copy.addEventListener("click", () => copyText(f.fix_diff, "수정안을 복사했습니다."));
+      fix.append(node("summary", "수정 코드 보기"), node("pre", f.fix_diff), node("p", "동작 검증 전 제안 · " + (f.fix_note || "적용 전 검토하세요.")), copy);
+      detail.append(fix);
+    }
+    const decision = node("details");
+    const adjustment = f.original_severity && f.original_severity !== f.severity
+      ? `심각도 조정 ${severityLabels[f.original_severity]} → ${severityLabels[f.severity]}` : "";
+    decision.append(node("summary", "판정 정보"), node("p", [f.rule_id, f.cwe, f.owasp, ...(f.kisa || []), f.kisa_reason,
+      confidenceLabels[f.confidence], adjustment, ...(f.how_found || []), f.triage_reason,
+      f.introduced_in && "처음 발견 " + f.introduced_in.slice(0, 12)].filter(Boolean).join(" · ") || "기록 없음"));
+    detail.append(decision);
+  });
+  return detail;
+}
+
+function taskCard(group) {
+  const card = node("article", "", "task-card " + group.level);
+  const tags = node("div", "", "task-tags");
+  tags.append(badge(group.level));
+  if (group.fresh) tags.append(node("span", "새로 발견", "new-tag"));
+  const heading = node("h3", group.title);
+  heading.append(node("small", group.locations.length + "곳"));
+  const locations = group.locations.slice(0, 3).join(" · ") + (group.locations.length > 3 ? ` · 외 ${group.locations.length - 3}곳` : "");
+  card.append(tags, heading);
+  const impact = group.items.find(f => f.title === group.title && f.severity === group.level)?.impact_ko;
+  if (impact) card.append(node("p", impact));
+  card.append(node("p", locations, "task-path"));
+  if (group.open.length) {
+    const copy = node("button", "수정 요청 프롬프트 복사", "primary");
+    const manual = node("textarea");
+    manual.readOnly = true; manual.hidden = true; manual.setAttribute("aria-label", "직접 복사할 프롬프트");
+    const prompt = fixPrompt(group, result);
+    copy.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(prompt); message("프롬프트를 복사했습니다. AI 코딩 도구에 붙여넣으세요."); }
+      catch { manual.hidden = false; manual.value = prompt; manual.focus(); manual.select(); }
+    });
+    card.append(copy, manual);
+  }
+  const detail = node("details", "", "task-detail");
+  detail.setAttribute("name", "active-task");
+  detail.append(node("summary", "위치별 근거와 수정 방법"));
+  detail.addEventListener("toggle", () => {
+    if (!detail.open || detail.children.length > 1) return;
+    const items = [...group.open, ...group.items.filter(f => findingStatus(f) !== "open")];
+    const entries = items.slice(0, 3).map(locationDetail);
+    detail.append(...entries);
+    entries[0].open = true;
+    if (items.length > entries.length) {
+      const more = node("details", "", "location-detail");
+      more.append(node("summary", `나머지 ${items.length - entries.length}건 보기`));
+      more.addEventListener("toggle", () => {
+        if (more.open && more.children.length === 1) more.append(...items.slice(3).map(locationDetail));
+      });
+      detail.append(more);
+    }
+  });
+  card.append(detail);
+  return card;
+}
+
 function filterFindings() {
-  if (!result) return;
-  const query = $("search").value.toLocaleLowerCase().trim();
-  visibleFindings = sortedFindings().filter(f => (!statusFilter || findingStatus(f) === statusFilter)
-    && (!severityFilter.size || severityFilter.has(f.severity)) && (!newOnly || f.change === "new")
-    && `${f.title} ${f.location?.file || ""} ${f.cwe || ""}`.toLocaleLowerCase().includes(query));
-  $("filtered-count").textContent = String(visibleFindings.length).padStart(2, "0");
-  $("no-findings").hidden = visibleFindings.length !== 0;
-  $("new-filter").hidden = !newOnly; $("new-filter").setAttribute("aria-pressed", String(newOnly));
-  const narrowed = severityFilter.size || newOnly || query;
-  $("no-findings-title").textContent = narrowed ? "조건에 맞는 발견이 없습니다"
-    : statusFilter === "open" ? "열린 발견이 없습니다" : "이 상태의 발견이 없습니다";
-  $("no-findings-hint").textContent = narrowed ? "심각도 선택을 해제하거나 검색어를 지워 보세요."
-    : "적용한 규칙에서 찾은 항목이 없다는 뜻이며, 안전을 보증하지는 않습니다.";
-  $("findings").replaceChildren(...visibleFindings.map(f => {
-    const row = node("button", "", "finding-row " + (levels.includes(f.severity) ? f.severity : "Info"));
-    row.type = "button"; row.dataset.findingId = f.id;
-    row.setAttribute("aria-label", `${severityLabels[f.severity]} · ${f.title} · ${locationText(f)} · ${statuses[findingStatus(f)]}`);
-    const name = node("span", "", "finding-title-wrap"), title = node("span", f.title, "finding-title");
-    title.title = f.title; name.append(title);
-    if (f.change === "new") name.append(node("span", changes.new, "new-tag"));
-    const loc = node("span", locationText(f), "finding-location"); loc.title = locationText(f);
-    row.append(badge(f.severity), name, loc, node("span", "›", "row-arrow"));
-    row.addEventListener("click", () => showDetail(f));
-    return row;
-  }));
+  const query = $("search").value.trim().toLocaleLowerCase();
+  const matches = taskGroups.filter(g => !query || g.items.some(f =>
+    [f.title, f.cwe, f.location?.file].join(" ").toLocaleLowerCase().includes(query)));
+  const counts = new Map();
+  for (const group of matches) counts.set(group.section, (counts.get(group.section) || 0) + 1);
+  for (const section of Object.keys(sectionNames)) {
+    const button = $("jump-" + section);
+    button.setAttribute("aria-pressed", String(section === activeSection));
+    button.hidden = section !== "findings" && section !== "coverage" && section !== activeSection && !counts.has(section);
+  }
+  const coverage = activeSection === "coverage";
+  $("findings-label").textContent = sectionNames[activeSection];
+  $("resolution").hidden = activeSection !== "findings";
+  $("coverage-section").hidden = !coverage;
+  $("finding-search").hidden = coverage;
+  $("findings").hidden = coverage;
+  const groups = matches.filter(g => g.section === activeSection);
+  $("findings").replaceChildren(...groups.map(taskCard));
+  if (!coverage && !groups.length) {
+    const text = query ? "검색 조건에 맞는 항목이 없습니다." : "열린 치명·높음 항목이 없습니다.";
+    $("findings").append(node("p", text, "quiet-state"));
+  }
 }
 function renderCoverage() {
   const checks = result.coverage || [], completed = checks.filter(c => c.execution === "completed").length;
-  $("coverage-summary").textContent = checks.length ? `${checks.length}개 점검 중 ${completed}개 완료${completed < checks.length ? ` · ${checks.length - completed}개 미완료·수동 확인` : ""}` : "검사 범위 기록 없음";
+  $("coverage-summary").textContent = checks.length ? `검사 범위 · ${checks.length}개 점검 중 ${completed}개 완료${completed < checks.length ? ` · ${checks.length - completed}개 미완료·수동 확인` : ""}` : "검사 범위 기록 없음";
   const execution = {completed: "✓ 자동 점검 범위 검사 완료", partial: "◐ 부분 점검 · 수동 확인 포함", manual: "◐ 수동 확인 필요 · 미검사", unsupported: "✕ 지원 소스 없음 · 미검사"};
   $("coverage").replaceChildren(...checks.map(c => node("li", `${c.name} — ${execution[c.execution] || "✕ 검사 여부 미확인"}. ${c.reason || ""}`)));
   const profile = result.profile || {};
@@ -340,81 +353,54 @@ function render() {
   $("analysis-badge").textContent = analysis.label; $("analysis-badge").className = "analysis-badge " + analysis.className;
   $("analysis-badge").title = analysis.hint; $("analysis-badge").hidden = false;
   $("risk-grade").textContent = grade.label; $("risk").textContent = d.risk_score;
-  renderTrend(d);
-  $("delta").textContent = d.baseline_commit ? `+${d.delta?.new || 0} 새 위험 · −${d.delta?.fixed || 0} 해결` : "첫 스캔 · 다음 스캔부터 비교";
-  $("delta").title = d.baseline_commit ? "기준 커밋 " + d.baseline_commit : "";
-  const fresh = freshRisks(d);
-  $("risk-alert").hidden = !fresh.length;
-  $("risk-alert-text").textContent = `이번 커밋에서 치명·높음 위험 ${fresh.length}건이 새로 발견됐어요.`;
-  renderSeverity(); renderTabs(); filterFindings(); renderCoverage();
+  $("risk-grade").className = "badge " + grade.level;
+  taskGroups = groupFindings(d.findings);
+  const urgent = taskGroups.filter(g => g.section === "findings").length;
+  const later = taskGroups.filter(g => g.section === "later").length;
+  const fixed = taskGroups.filter(g => g.section === "fixed");
+  const done = fixed.filter(g => ["Critical", "High"].includes(g.level)).length;
+  const fresh = taskGroups.filter(g => g.fresh).length;
+  $("verdict-title").textContent = urgent ? `배포 전에 ${urgent}가지를 먼저 확인하세요.`
+    : later ? `우선순위가 낮은 ${later}가지를 확인하세요.` : "자동 점검에서 열린 문제가 없습니다.";
+  const notes = d.baseline_commit ? [fresh && `새로 발견한 문제 ${fresh}가지`, fixed.length && `해결된 문제 ${fixed.length}가지`]
+    : ["첫 검사입니다. 다음 검사부터 변화를 비교합니다."];
+  const incomplete = (d.coverage || []).filter(c => c.execution !== "completed").length;
+  if (incomplete) notes.push(`직접 확인할 점검 항목 ${incomplete}개`);
+  $("delta").textContent = notes.filter(Boolean).join(" · ") || "지난 검사와 비교해 새로 발견되거나 해결된 문제가 없습니다.";
+  $("resolution").textContent = urgent + done ? `치명·높음 ${urgent + done}가지 중 ${done}가지 해결` : "";
+  const latest = projectScans()[0];
+  $("history-notice").hidden = !latest || latest.scan_id === d.scan_id;
+  activeSection = "findings";
+  filterFindings(); renderCoverage();
   $("empty").hidden = true; $("result").hidden = false; $("download").disabled = false;
   renderOnboarding();
 }
 
-// Drawers: keep the list visible while isolating keyboard focus.
+// Keep keyboard focus inside settings until it closes.
 function setPageInert(value) {
   $("workspace").inert = value;
-  document.querySelector(".sidebar").inert = value;
+  $("app-nav").inert = value;
 }
 function openDrawer(id) {
   if (activeDrawer === id) return;
   const origin = document.activeElement;
   closeDrawer(false); returnFocus = origin; activeDrawer = id;
   $(id).hidden = false;
-  document.body.classList.toggle("detail-open", id === "detail");
   $("settings-backdrop").hidden = id !== "settings";
   setPageInert(true); $(id).focus();
 }
 function closeDrawer(restore = true) {
   if (!activeDrawer) return;
   $(activeDrawer).hidden = true; activeDrawer = null;
-  document.body.classList.remove("detail-open"); $("settings-backdrop").hidden = true;
+  $("settings-backdrop").hidden = true;
   setPageInert(false);
   if (restore && returnFocus?.isConnected) returnFocus.focus();
   returnFocus = null;
-}
-function showDetail(f) {
-  detailFinding = f;
-  $("detail-badge").replaceChildren(badge(f.severity));
-  if (f.change === "new") $("detail-badge").append(node("span", changes.new, "new-tag"));
-  $("detail-title").textContent = f.title; $("detail-location").textContent = locationText(f);
-  $("impact").textContent = f.impact_ko || "영향 설명 없음";
-  $("evidence").textContent = f.evidence || "근거 없음";
-  $("remediation").textContent = f.remediation_ko || "수정 방법 없음";
-  $("fix-diff").replaceChildren(...(f.fix_diff || "제공된 수정 코드가 없습니다.").split("\n").map(line =>
-    node("span", line, "diff-line" + (line.startsWith("+") && !line.startsWith("+++") ? " diff-add" : line.startsWith("-") && !line.startsWith("---") ? " diff-remove" : ""))));
-  $("fix-note").textContent = "동작 검증 전 제안 · " + (f.fix_note || "실제 코드 문맥에서 검토 필요");
-  $("copy-diff").disabled = !f.fix_diff;
-  $("ai-fix-hint").hidden = !!f.fix_diff || auth?.state !== "ready" || !selectedRepo();
-  $("detail-meta").textContent = [f.cwe, f.owasp, "신뢰도 " + (confidenceLabels[f.confidence] || "미확인"),
-    statuses[findingStatus(f)], f.introduced_in ? "처음 발견 커밋 " + f.introduced_in.slice(0, 12) : ""].filter(Boolean).join(" · ");
-  $("how-found").textContent = (f.how_found || []).join(" · ") || "기록 없음";
-  $("triage").textContent = f.triage_reason || "로컬 규칙 탐지 · 모델 검토 없음";
-  $("severity-adjustment").textContent = f.original_severity && f.original_severity !== f.severity
-    ? `모델이 ${severityLabels[f.original_severity]} → ${severityLabels[f.severity]}으로 조정` : "";
-  $("decision-details").open = false;
-  const index = visibleFindings.indexOf(f);
-  $("previous-finding").disabled = index <= 0; $("next-finding").disabled = index < 0 || index >= visibleFindings.length - 1;
-  for (const row of $("findings").children) row.classList.toggle("selected", row.dataset.findingId === f.id);
-  openDrawer("detail");
-  $("detail").querySelector(".drawer-body").scrollTop = 0;
-}
-function moveDetail(offset) {
-  const index = visibleFindings.indexOf(detailFinding), next = visibleFindings[index + offset];
-  if (next) showDetail(next);
 }
 function showProjectDialog() {
   closeDrawer(); $("connected-next").hidden = true; $("connect-form").hidden = false;
   $("project-dialog").showModal(); $("repo-path").focus();
 }
-function applyTheme(theme) {
-  if (!["system", "light", "dark"].includes(theme)) theme = "system";
-  if (theme === "system") delete document.documentElement.dataset.theme;
-  else document.documentElement.dataset.theme = theme;
-  remember("localStorage", "vibescan-theme", theme);
-  for (const button of $("theme-options").children) button.setAttribute("aria-pressed", String(button.dataset.theme === theme));
-}
-
 // Scan, login and background watchers
 function busy(running) {
   scanning = running;
@@ -449,7 +435,14 @@ function renderProgress(title, state) {
 }
 function alertNewRisks(scan) {
   const fresh = freshRisks(scan);
-  if (!fresh.length || notifiedScans.has(scan.scan_id)) return false;
+  if (notifiedScans.has(scan.scan_id)) return false;
+  if (!fresh.length) {
+    const solved = groupFindings(scan.findings).filter(g => g.section === "fixed").length;
+    if (!solved) return false;
+    notifiedScans.add(scan.scan_id);
+    message(`${scan.repo?.name || "프로젝트"} · 이번 검사에서 ${solved}가지가 해결됐습니다.`);
+    return true;
+  }
   notifiedScans.add(scan.scan_id);
   const text = `${scan.repo?.name || "프로젝트"} · 커밋 ${(scan.commit || "").slice(0, 7)}에서 새 치명·높음 ${fresh.length}건: ${fresh[0].title}`;
   message(text);
@@ -553,12 +546,7 @@ $("close-project").addEventListener("click", () => $("project-dialog").close());
 for (const id of ["settings-open", "auth-chip", "connect-ai", "onboard-auth"]) $(id).addEventListener("click", () => { closeScanMenu(); openDrawer("settings"); });
 $("close-settings").addEventListener("click", () => closeDrawer());
 $("settings-backdrop").addEventListener("click", () => closeDrawer());
-$("close-detail").addEventListener("click", () => closeDrawer());
-$("previous-finding").addEventListener("click", () => moveDetail(-1));
-$("next-finding").addEventListener("click", () => moveDetail(1));
-$("copy-diff").addEventListener("click", () => detailFinding?.fix_diff && copyText(detailFinding.fix_diff, "수정안을 복사했습니다."));
 $("copy-path").addEventListener("click", () => copyText(resultsPath, "결과 폴더 경로를 복사했습니다."));
-$("ai-fix-hint").addEventListener("click", () => { closeDrawer(); startScan("ai"); });
 $("scan").addEventListener("click", () => startScan(scanMode === "ai" && auth?.state !== "ready" ? "local" : scanMode));
 $("onboard-scan").addEventListener("click", () => startScan("local"));
 $("scan-menu-toggle").addEventListener("click", () => {
@@ -570,12 +558,20 @@ $("mode-local").addEventListener("click", () => startScan("local"));
 $("mode-ai").addEventListener("click", () => startScan("ai"));
 $("scan-select").addEventListener("change", () => { resetFilters(); selectScan(); });
 $("search").addEventListener("input", filterFindings);
-$("risk-alert").addEventListener("click", () => {
-  statusFilter = "open"; newOnly = true; severityFilter.clear(); $("search").value = "";
-  renderTabs(); renderSeverity(); filterFindings(); $("findings").scrollIntoView({block: "nearest"});
-  $("findings").querySelector("button")?.focus();
+for (const section of Object.keys(sectionNames)) {
+  $("jump-" + section).addEventListener("click", () => {
+    activeSection = section;
+    filterFindings();
+    const heading = $("findings-label");
+    heading.style.scrollMarginTop = ($("app-nav").offsetHeight + 12) + "px";
+    heading.focus({preventScroll: true});
+    heading.scrollIntoView({block: "start"});
+  });
+}
+$("projects").addEventListener("change", () => chooseProject($("projects").value));
+$("latest-scan").addEventListener("click", () => {
+  renderHistory(); resetFilters(); selectScan();
 });
-$("new-filter").addEventListener("click", () => { newOnly = false; filterFindings(); });
 $("dismiss-toast").addEventListener("click", () => { $("toast").hidden = true; });
 $("retry").addEventListener("click", () => { const action = retryAction; message(""); if (action) action(); });
 $("login").addEventListener("click", async () => {
@@ -615,7 +611,6 @@ $("background-llm").addEventListener("change", async () => {
   } catch (error) { $("background-llm").checked = !wanted; message(error.message, true); }
   finally { backgroundPending = false; busy(scanning); }
 });
-for (const button of $("theme-options").children) button.addEventListener("click", () => applyTheme(button.dataset.theme));
 $("download").addEventListener("click", () => {
   if (!result || result.repo.path !== selectedProject) return;
   const url = URL.createObjectURL(new Blob([result.report_md], {type: "text/markdown;charset=utf-8"}));
@@ -633,20 +628,13 @@ document.addEventListener("keydown", event => {
       else if (event.shiftKey && (document.activeElement === first || document.activeElement === $(activeDrawer))) { event.preventDefault(); last.focus(); }
       else if (!event.shiftKey && (document.activeElement === last || document.activeElement === $(activeDrawer))) { event.preventDefault(); first.focus(); }
     }
-    if (activeDrawer === "detail" && ["ArrowUp", "ArrowDown"].includes(event.key)) { event.preventDefault(); moveDetail(event.key === "ArrowDown" ? 1 : -1); }
     return;
   }
   if (event.key === "Escape" && !$("scan-menu").hidden) { closeScanMenu(); $("scan-menu-toggle").focus(); return; }
   if ($("project-dialog").open || event.ctrlKey || event.metaKey || event.altKey || /INPUT|TEXTAREA|SELECT/.test(event.target.tagName) || event.target.isContentEditable) return;
-  if (event.key === "/" && result) { event.preventDefault(); $("search").focus(); }
-  if (["j", "k"].includes(event.key) && result) {
-    const rows = [...$("findings").children], index = rows.indexOf(document.activeElement);
-    const next = rows[Math.max(0, Math.min(rows.length - 1, index + (event.key === "j" ? 1 : -1)))];
-    if (next) { event.preventDefault(); next.focus(); }
-  }
+  if (event.key === "/" && result && activeSection !== "coverage") { event.preventDefault(); $("search").focus(); }
 });
 async function initialize() {
-  applyTheme(stored("localStorage", "vibescan-theme", "system"));
   const settings = api("/api/settings").then(saved => { $("background-llm").checked = saved.background_llm; }).catch(error => message(error.message, true));
   await Promise.all([loadRepos().catch(error => message(error.message, true, loadRepos)), loadAuth(), settings]);
   await refresh(); await pollJob(); pollLatest();

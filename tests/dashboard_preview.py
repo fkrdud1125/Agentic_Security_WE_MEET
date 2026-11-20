@@ -43,6 +43,12 @@ def samples():
         finding.update(id=f"F-{index:03}", status=status, change="fixed" if status == "fixed" else "existing",
                        title="기존 발견 검토 " + str(index))
         findings.append(finding)
+    findings[0]["rule_id"] = "demo-sql"
+    findings.append(dict(findings[0], id="F-018", change="existing",
+                         location=dict(file="app/api/archive.py", line=59)))
+    for finding in findings[1:-1]:
+        # Only the SQL fixture has a code-level explanation and suggested diff.
+        finding.update(impact_ko="", remediation_ko="", evidence="", fix_diff="", triage_reason="")
     summary = {level: sum(f["severity"] == level and f["status"] == "open" for f in findings)
                for level in ["Critical", "High", "Medium", "Low", "Info"]}
     common = dict(
@@ -85,8 +91,7 @@ def build(output, web):
 const demoScans = SCANS;
 const previewEmpty = new URLSearchParams(location.search).has("empty");
 let demoRepos = previewEmpty ? [] : [{path:"C:/demo/vulnapp",name:"vulnapp",hook:true},{path:"C:/demo/portfolio",name:"portfolio",hook:false},{path:"C:/demo/new-project",name:"new-project",hook:null}];
-let demoTheme = "light";
-try { localStorage.setItem("vibescan-project", "C:/demo/vulnapp"); localStorage.setItem("vibescan-theme", demoTheme); } catch {}
+try { localStorage.setItem("vibescan-project", "C:/demo/vulnapp"); } catch {}
 window.fetch = async (url, options={}) => {
   let data;
   if (url === "/api/repos") {
@@ -104,7 +109,7 @@ window.fetch = async (url, options={}) => {
 """
     fixture = fixture.replace("SCANS", json.dumps(scans, ensure_ascii=False).replace("</", "<\\/"))
     html = (web / "index.html").read_text(encoding="utf-8")
-    html = html.replace('<script src="/assets/theme.js"></script>', "<script>" + fixture + (web / "theme.js").read_text(encoding="utf-8") + "</script>")
+    html = html.replace("</head>", "<script>" + fixture + "</script></head>")
     css = (web / "dashboard.css").read_text(encoding="utf-8")
     font_uri = (web / "fonts/PretendardVariable.woff2").resolve().as_uri()
     css = css.replace("/assets/fonts/PretendardVariable.woff2", font_uri)
