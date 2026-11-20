@@ -57,7 +57,7 @@ def run():
     print(f'probe={tp}/{positive}, false_positives={fp}, precision={precision:.3f}, recall={recall:.3f}')
     missed = [r['id'] for r in rows if r['expect'] == 'vulnerable' and not r['detected']]
     print('missed:', ', '.join(missed))
-    assert tp >= 34 and fp == 0, 'Detection benchmark regressed from the checked-in baseline'
+    assert set(missed) <= {'P35'} and fp == 0, 'Detection benchmark regressed from the checked-in baseline'
     return rows
 
 

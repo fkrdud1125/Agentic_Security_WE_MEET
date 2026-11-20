@@ -10,10 +10,10 @@ from unittest.mock import Mock, patch
 
 from scanner.context import Context, sanitize
 from scanner.detectors import config, routes, secrets
-from scanner.detectors.semgrep import convert, semgrep
+from scanner.detectors.semgrep import Matches, convert, semgrep
 from scanner.history import SCHEMA, save_scan
 from scanner.ingest import snapshot
-from scanner.kisa import checklist
+from scanner.kisa import checklist, legacy_coverage
 from scanner.models import Confidence, ScanResult, Status
 from scanner.normalize import RawHit, code_identity, normalize
 from scanner.static import inspect
@@ -54,7 +54,7 @@ class HardeningTests(unittest.TestCase):
             convert(match, {'app.py'})
 
     def test_semgrep_partial_source_but_fatal_rule_errors(self):
-        data = {'results': [], 'errors': [{'type': ['PartialParsing', []], 'path': 'broken.js'}]}
+        data = {'results': [], 'paths': {'scanned': []}, 'errors': [{'type': ['PartialParsing', []], 'path': 'broken.js'}]}
         with patch('scanner.detectors.semgrep.subprocess.run', return_value=Mock(returncode=0, stdout=json.dumps(data))):
             self.assertEqual(semgrep(self.root).partial_files, ['broken.js'])
         for error in ({'type': 'InvalidRuleSchema'}, {'type': 'Timeout', 'path': None}):
@@ -146,7 +146,7 @@ def safe(user=Depends(get_current_user)):
     return []
 '''
         hits, rows = routes.detect('routes.py', content)
-        self.assertEqual(len(hits), 1)
+        self.assertEqual(len(hits), 2)
         self.assertEqual(rows[0]['path'], '/api/admin/users')
         self.assertEqual(hits[0].confidence, Confidence.POTENTIAL)
         js = '''// app.get('/admin/fake', (req,res) => {});
@@ -154,7 +154,7 @@ app.get('/admin/users', authMiddleware, (req,res) => { res.json([]); });
 app.get('/orders/:id', (req,res) => { res.json(db.findById(req.params.id)); });'''
         hits, rows = routes.detect('api.ts', js)
         self.assertEqual(len(rows), 2)
-        self.assertEqual([h.cwe for h in hits], ['CWE-639'])
+        self.assertEqual([h.cwe for h in hits], ['CWE-862', 'CWE-639'])
         hits, _ = config.detect('app.py', 'app.run(debug=False)\nresponse.set_cookie("x", v, **cookie_options)')
         self.assertEqual(hits, [])
 
@@ -172,10 +172,54 @@ def detail(user_id):
         hits, _ = routes.detect('app.py', code)
         self.assertEqual({h.cwe for h in hits}, {'CWE-639', 'CWE-862'})
         js = """app.get('/admin/a', handler);
-app.get('/admin/b', authMiddleware, handler);"""
+app.get('/admin/b', requireAdmin, handler);"""
         hits, rows = routes.detect('app.js', js)
         self.assertEqual(len(rows), 2)
         self.assertEqual([h.line for h in hits], [1])
+
+    def test_admin_dependency_and_registration_order(self):
+        code = '''@admin_required
+@app.get("/admin/outer")
+def outer(): pass
+@app.get("/admin/inner")
+@admin_required
+def inner(): pass
+@router.get("/admin/dependency", dependencies=[Depends(require_admin)])
+def dependency(): pass
+@router.get("/admin/identity")
+def identity(user=Depends(get_current_user)): pass
+'''
+        hits, rows = routes.detect('app.py', code)
+        self.assertEqual([h.line for h in hits], [3, 10])
+        self.assertEqual([r['admin_guard'] for r in rows], [False, True, True, False])
+
+    def test_silent_engine_skip_and_open_candidate_preserve_partial_coverage(self):
+        for name in ('checked.py', 'skipped.py', 'notes.txt'):
+            (self.root / name).write_text('pass')
+        with patch('scanner.static.semgrep', return_value=Matches([], scanned_files=['checked.py'])):
+            found = inspect(self.root, ['checked.py', 'skipped.py', 'notes.txt'])
+        self.assertEqual(found.partial_files, ['skipped.py'])
+        finding = normalize([RawHit('semgrep','sql','checked.py',1,'CWE-89',['CI-02'],'SQL','fix')])[0]
+        rows = checklist([finding], {'python': 2}, found.partial_files)
+        sql = next(row for row in rows if row['code'] == 'CI-02')
+        self.assertEqual(sql['status'], '취약 후보')
+        self.assertEqual(legacy_coverage([{'id': 'sql'}], rows)[0]['execution'], 'partial')
+
+    def test_owner_reference_must_constrain_the_returned_query(self):
+        code = '''@app.get("/items/<id>")
+def item(id):
+    log(owner_id=current_user.id)
+    return db.query(id)
+@app.get("/notes/<id>")
+def note(id):
+    return db.query(id).filter(Note.owner_id == current_user.id).first()
+'''
+        hits, _ = routes.detect('app.py', code)
+        self.assertEqual([(h.line, h.cwe) for h in hits], [(2, 'CWE-639')])
+        js = """app.get('/items/:id', (req,res) => { log({ownerId:req.user.id}); res.json(db.findById(req.params.id)); });
+app.get('/notes/:id', (req,res) => res.json(db.findUnique({where:{id:req.params.id, ownerId:req.user.id}})));"""
+        hits, _ = routes.detect('app.js', js)
+        self.assertEqual([(h.line, h.cwe) for h in hits], [(1, 'CWE-639')])
 
     def test_dynamic_cookie_policy_and_similar_names(self):
         code = '''BACKUP_SESSION_COOKIE_SECURE = False

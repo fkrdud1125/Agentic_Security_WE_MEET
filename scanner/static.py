@@ -66,6 +66,10 @@ def inspect(directory, files):
     matched = semgrep(directory) if files else []
     raw = [convert(hit, allowed) for hit in matched]
     partial = list(getattr(matched, 'partial_files', []))
+    if hasattr(matched, 'scanned_files'):
+        supported = ('.py', '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs',
+                     '.html', '.j2', '.jinja', '.vue', '.svelte', '.astro')
+        partial.extend(name for name in allowed - matched.scanned_files if name.lower().endswith(supported))
     if any(name not in allowed for name in partial):
         raise ValueError('부분 실패 파일이 검사 범위 밖입니다.')
     partial += getattr(files, 'skipped', [])

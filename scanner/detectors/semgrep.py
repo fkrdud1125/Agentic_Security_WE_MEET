@@ -12,9 +12,10 @@ from ..normalize import RawHit
 
 
 class Matches(list):
-    def __init__(self, matches, partial_files=()):
+    def __init__(self, matches, partial_files=(), scanned_files=()):
         super().__init__(matches)
         self.partial_files = sorted(set(partial_files))
+        self.scanned_files = set(scanned_files)
 
 
 def semgrep(directory):
@@ -44,10 +45,13 @@ def semgrep(directory):
         partial.append(Path(path).as_posix().removeprefix("./"))
     for skipped in data.get("paths", {}).get("skipped", []):
         if skipped.get("reason") in {"analysis_failed", "exceeded_size_limit"}:
-            partial.append(skipped["path"])
+            partial.append(Path(skipped["path"]).as_posix())
     if data.get("skipped_rules") or run.returncode not in (0, 3) or run.returncode and not partial:
         raise RuntimeError(f"Semgrep 실행 실패 (종료 코드 {run.returncode}).")
-    return Matches(data["results"], partial)
+    scanned = data.get('paths', {}).get('scanned')
+    if not isinstance(scanned, list) or not all(isinstance(name, str) for name in scanned):
+        raise RuntimeError("Semgrep 검사 파일 목록을 확인할 수 없습니다.")
+    return Matches(data["results"], partial, (Path(name).as_posix() for name in scanned))
 
 
 def convert(hit, allowed):

@@ -92,7 +92,7 @@ app.run(debug=True, host='0.0.0.0')
 app.run(debug=False)
 
 @app.get('/admin/safe')
-@login_required
+@admin_required
 # GT: S11 CI-19 safe
 def safe_admin():
     return 'users'

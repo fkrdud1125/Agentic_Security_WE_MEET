@@ -42,12 +42,13 @@ def checklist(findings, languages, partial_files, carried=()):
                 state = '해당 기능 없음(추정)'; note = '검사한 소스에서 업로드 API 단서를 찾지 못했습니다.'
             if item['code'] == 'CI-08' and code_languages & {'javascript', 'typescript'}:
                 state = '부분 점검'; note = 'SSRF 규칙은 현재 Python만 지원합니다.'
+        coverage_status = state
         if matches:
             state = '취약 후보'
             if any(f.id in matches for f in carried):
                 note += ' 이번 검사에서 재확인하지 못한 이전 발견을 포함합니다.'
         rows.append({'code': item['code'], 'name': item['name'], 'status': state,
-                     'findings': matches, 'detectors': detectors, 'note': note,
+                     'coverage_status': coverage_status, 'findings': matches, 'detectors': detectors, 'note': note,
                      'criteria': item['criteria'], 'source_verified': False})
     return rows
 
@@ -57,6 +58,6 @@ def legacy_coverage(checks, rows):
                'auth': ['CI-10', 'CI-11', 'CI-19'], 'headers': ['CI-16', 'CI-17', 'CI-18', 'V-02']}
     for check in checks:
         related = [r for r in rows if r['code'] in mapping[check['id']]]
-        check['execution'] = ('partial' if any(r['status'] in ('부분 점검', '동적 점검 필요', '수동 확인 필요') for r in related)
+        check['execution'] = ('partial' if any(r.get('coverage_status', r['status']) in ('부분 점검', '동적 점검 필요', '수동 확인 필요') for r in related)
                               else 'completed')
     return checks
