@@ -17,12 +17,12 @@ def catalog():
     return json.loads(path.read_text(encoding='utf-8'))
 
 
-def checklist(findings, languages, partial_files):
+def checklist(findings, languages, partial_files, carried=()):
     rows = []
     unsupported = set(languages) & {'php', 'rb', 'go', 'java', 'kt', 'vue', 'svelte', 'astro'}
     code_languages = set(languages) & {'python', 'javascript', 'typescript'}
     for item in catalog()['items']:
-        matches = [f.id for f in findings if item['code'] in f.kisa and f.status == Status.OPEN and f.change != Change.FIXED]
+        matches = [f.id for f in (*findings, *carried) if item['code'] in f.kisa and f.status == Status.OPEN and f.change != Change.FIXED]
         detectors = item['detectors']
         state = item['default_status']
         note = '자동 정적 검사로 전체 안전성을 판정할 수 없습니다.'
@@ -44,6 +44,8 @@ def checklist(findings, languages, partial_files):
                 state = '부분 점검'; note = 'SSRF 규칙은 현재 Python만 지원합니다.'
         if matches:
             state = '취약 후보'
+            if any(f.id in matches for f in carried):
+                note += ' 이번 검사에서 재확인하지 못한 이전 발견을 포함합니다.'
         rows.append({'code': item['code'], 'name': item['name'], 'status': state,
                      'findings': matches, 'detectors': detectors, 'note': note,
                      'criteria': item['criteria'], 'source_verified': False})

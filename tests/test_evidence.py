@@ -90,6 +90,19 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn("+const STRIPE_KEY = process.env.STRIPE_KEY;", hit.fix)
         self.assertNotIn(KEY, hit.fix)
 
+    def test_export_masks_short_sibling_and_clipped_secrets(self):
+        from scanner.static import inspect
+        long_value = "Aa19" * 60
+        (self.base / "config.py").write_text(
+            f'SECRET_KEY = "dev"; password = "second-private"; api_token = "{long_value}"\n'
+        )
+        with patch("scanner.static.semgrep", return_value=[]):
+            findings = inspect(self.base, ["config.py"])
+        self.assertTrue(findings)
+        for finding in findings:
+            for value in ("dev", "second-private", long_value[:12]):
+                self.assertNotIn(value, finding.evidence + finding.fix_diff)
+
     def test_every_rule_explains_its_impact_and_shows_a_fix(self):
         for path in sorted(Path(__file__).resolve().parents[1].glob("rules/vibescan/*.yml")):
             for rule in json.loads(path.read_text(encoding="utf-8"))["rules"]:

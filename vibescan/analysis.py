@@ -78,6 +78,9 @@ def plan(context, app, token, model):
 
 def review(context, findings, token, model):
     snippets = {f.id: context.excerpt(f.location.file, f.location.line) for f in findings}
+    findings = [f for f in findings if snippets[f.id] is not None]
+    if not findings:
+        return 0
     data = [{"id": f.id, "type": f.title, "severity": f.severity.value,
              "snippet": snippets[f.id],
              "file": context.aliases.get(f.location.file),

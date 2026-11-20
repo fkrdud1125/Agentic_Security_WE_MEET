@@ -44,8 +44,9 @@ SAMPLE_PATH = re.compile(r"(?:^|/)(?:tests?|__tests__|specs?|fixtures?|seeds?|ex
 def mask(text, values=()):
     """Keep the first four characters so a person can recognise the value; never the rest."""
     for value in sorted(set(values) | set(KEY.findall(text)), key=len, reverse=True):
-        if len(value) >= 8:
-            text = text.replace(value, value[:4] + "••••")
+        if value:
+            prefix = value[:4] if len(value) >= 8 else ""
+            text = text.replace(value, prefix + "••••")
     return text
 
 
@@ -81,8 +82,10 @@ def service_role(value):
         return False
 
 
-def detect(name, content):
+def detect(name, content, hidden=None):
     hits = {}
+    if hidden is None:
+        hidden = set()
     lines = content.splitlines()
     sample = bool(SAMPLE_PATH.search(name))
     lockfile = name.rsplit("/", 1)[-1].lower() in LOCKFILES
@@ -101,6 +104,7 @@ def detect(name, content):
             if not PASSWORDISH.search(f"{owner} {lines[line - 1]}") and not looks_random(value):
                 return  # placeholders such as api_key="codex-oauth" or "your-api-key" are not keys
         weak = signing and len(value) < 32
+        hidden.add(value)
         rule = 'weak-signing-key' if weak else 'literal-token'
         codes = ['CI-16'] if weak else ['CI-05']
         title = '약한 고정 서명키' if weak else '소스에 포함된 인증정보 후보'
@@ -161,8 +165,12 @@ def detect(name, content):
             pass
     # A weak signing key is the more specific explanation for the same literal.
     for line, rule in list(hits):
-        if rule == 'weak-signing-key':
+        if (rule == 'weak-signing-key' and (line, 'literal-token') in hits and
+                hits[(line, 'literal-token')].secret == hits[(line, rule)].secret):
             hits.pop((line, 'literal-token'), None)
+    for hit in hits.values():
+        if hit.fix:
+            hit.fix = mask(hit.fix, hidden)
     return list(hits.values())
 def sensitive_literals(tree):
     """Find literal values under credential assignments, dict keys and keyword arguments."""

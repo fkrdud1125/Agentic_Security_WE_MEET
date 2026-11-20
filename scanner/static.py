@@ -15,9 +15,9 @@ def excerpt(content, line, hidden=()):
     The model never receives this text: it gets the sanitized Context excerpt instead.
     """
     lines = content.splitlines()
-    rows = [f"{'>' if n == line else ' '} {n:>4} | {lines[n - 1][:200]}"
+    rows = [f"{'>' if n == line else ' '} {n:>4} | {secrets.mask(lines[n - 1], hidden)[:200]}"
             for n in range(max(1, line - 2), min(len(lines), line + 2) + 1)]
-    return secrets.mask("\n".join(rows), hidden)
+    return "\n".join(rows)
 
 
 def profile(directory, files):
@@ -76,8 +76,10 @@ def inspect(directory, files):
             raise ValueError('검사 근거 줄이 파일 범위 밖입니다.')
         hit.identity = code_identity(contents[hit.file], hit.line, hit.file.endswith('.py'))
     route_rows, settings = [], []
+    hidden = {}
     for name, content in contents.items():
-        raw.extend(secrets.detect(name, content))
+        hidden[name] = set()
+        raw.extend(secrets.detect(name, content, hidden[name]))
         found, summary = config.detect(name, content)
         raw.extend(found); settings.extend(summary)
         found, rows = routes.detect(name, content)
@@ -87,13 +89,13 @@ def inspect(directory, files):
                 ast.parse(content)
             except (SyntaxError, ValueError):
                 partial.append(name)
-    found = {}
-    for hit in raw:
-        if getattr(hit, 'secret', None):
-            found.setdefault(hit.file, set()).add(hit.secret)
     for hit in raw:
         if hit.file in contents:
-            hit.evidence = excerpt(contents[hit.file], hit.line, found.get(hit.file, ()))
+            if any('\n' in value or 'PRIVATE KEY-----' in value for value in hidden[hit.file]):
+                hit.evidence = '[여러 줄에 걸친 비밀값 보호를 위해 코드 생략]'
+                hit.fix = ''
+            else:
+                hit.evidence = excerpt(contents[hit.file], hit.line, hidden[hit.file])
     for entry in getattr(files, 'sensitive_files', []):
         raw.append(RawHit('secrets', 'vs-secret-file', entry['path'], 1, 'CWE-540', ['CI-05', 'V-01'],
             '민감 파일이 Git HEAD에 포함됨', '실제 자격증명이면 교체하고 추적을 해제하세요. .gitignore 추가만으로 과거 커밋에서 삭제되지 않습니다.',

@@ -21,7 +21,8 @@ class Files(list):
     def __init__(self):
         super().__init__()
         self.sensitive_files = []
-        self.skipped = []  # committed paths this file system cannot hold side by side
+        self.skipped = []
+        self.excluded = set()
 
 
 def sensitive_kind(path):
@@ -79,7 +80,7 @@ def snapshot(repo, destination):
     branch = git(root, "rev-parse", "--abbrev-ref", "HEAD").decode().strip()
     entries = []
     ignores = {}
-    oversized_sensitive = []
+    files = Files()
     for record in git(root, "ls-tree", "-rlz", commit).split(b"\0"):
         if not record:
             continue
@@ -97,11 +98,9 @@ def snapshot(repo, destination):
                or part.endswith((" ", ".")) or PureWindowsPath(part).is_reserved()
                or any(ord(c) < 32 or c in ':\\*?"<>|' for c in part) for part in parts):
             continue
-        if int(size) > MAX_FILE:
-            if sensitive_kind(path):
-                oversized_sensitive.append({'path': path.as_posix(), 'kind': sensitive_kind(path), 'keys': []})
-            continue
         if path.name in (".gitignore", ".vibescanignore"):
+            if int(size) > MAX_FILE:
+                raise ValueError("제외 규칙 파일이 크기 제한을 초과합니다.")
             ignores[path] = GitIgnoreSpec.from_lines(git(root, "cat-file", "blob", oid.decode())
                                                      .decode("utf-8", "replace").splitlines())
         elif (sensitive_kind(path) or path.name in {'.env.example', '.env.sample', 'Dockerfile'}):
@@ -115,9 +114,18 @@ def snapshot(repo, destination):
     total = 0
     for path, oid, size in entries:
         if ignored(path, ignores) and not sensitive_kind(path):
+            files.excluded.add(path.as_posix())
             continue
         custom = ignores.get(Path('.vibescanignore'))
         if custom and custom.match_file(path.as_posix()):
+            files.excluded.add(path.as_posix())
+            continue
+        if size > MAX_FILE:
+            kind = sensitive_kind(path)
+            if kind:
+                files.sensitive_files.append({'path': path.as_posix(), 'kind': kind, 'keys': []})
+            else:
+                files.skipped.append(path.as_posix())
             continue
         total += size
         if total > MAX_TOTAL:
@@ -125,9 +133,6 @@ def snapshot(repo, destination):
         selected.append((path, oid, size))
     stream = io.BytesIO(git(root, "cat-file", "--batch",
                             input_bytes=b"".join(oid.encode() + b"\n" for _, oid, _ in selected)))
-    files = Files()
-    custom = ignores.get(Path('.vibescanignore'))
-    files.sensitive_files.extend(e for e in oversized_sensitive if not custom or not custom.match_file(e['path']))
     for path, oid, size in selected:
         header = stream.readline().split()
         if header != [oid.encode(), b"blob", str(size).encode()]:
@@ -143,8 +148,10 @@ def snapshot(repo, destination):
         try:
             blob.decode("utf-8")
         except UnicodeDecodeError:
+            files.skipped.append(path.as_posix())
             continue
         if b"\0" in blob:
+            files.skipped.append(path.as_posix())
             continue
         target = destination / path
         target.parent.mkdir(parents=True, exist_ok=True)

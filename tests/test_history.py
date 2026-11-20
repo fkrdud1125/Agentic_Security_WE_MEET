@@ -57,6 +57,7 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(sorted(f.fingerprint for f in gone), ["gone", "same"])
         self.assertTrue(all(f.change == Change.FIXED for f in gone))
         self.assertEqual([(f.fingerprint, f.change) for f in kept], [("broken", Change.EXISTING)])
+        self.assertTrue(all(f.evidence != base.evidence and not f.fix_diff for f in kept + gone))
         self.assertEqual(previous.findings[2].change, None)  # the stored previous result is not mutated
         previous.findings.append(old("F-006", ""))
         self.assertIsNone(compare([old("F-001", "same")], previous, "c3"))

@@ -102,8 +102,14 @@ def compare(findings, previous, commit, partial_files=()):
             f.change, f.introduced_in = Change.EXISTING, old.introduced_in
         else:
             f.change, f.introduced_in = Change.NEW, commit
-    left = [f for group in before.values() for f in group]
-    # A file that failed to parse this time proves nothing about its old findings, so keep them open.
-    kept = [replace(f, change=Change.EXISTING) for f in left if f.location.file in partial_files]
-    gone = [replace(f, change=Change.FIXED) for f in left if f.location.file not in partial_files]
+    kept, gone = [], []
+    partial = set(partial_files)
+    for group in before.values():
+        for f in group:
+            unresolved = f.location.file in partial
+            # Old reports can contain excerpts written before the current redaction rules.
+            historical = replace(f, change=Change.EXISTING if unresolved else Change.FIXED,
+                                 evidence='[이전 검사 위치 · 현재 커밋 근거 코드 없음]', fix_diff='',
+                                 fix_note='현재 커밋에서 재검증한 수정 예시 없음')
+            (kept if unresolved else gone).append(historical)
     return kept, gone

@@ -158,6 +158,37 @@ app.get('/orders/:id', (req,res) => { res.json(db.findById(req.params.id)); });'
         hits, _ = config.detect('app.py', 'app.run(debug=False)\nresponse.set_cookie("x", v, **cookie_options)')
         self.assertEqual(hits, [])
 
+    def test_indirect_route_signals_do_not_clear_candidates(self):
+        code = '''@app.before_request
+def log_request():
+    print("request")
+@app.get("/admin/authenticate")
+def admin():
+    return []
+@app.get("/users/<user_id>")
+def detail(user_id):
+    return db.query(user_id)
+'''
+        hits, _ = routes.detect('app.py', code)
+        self.assertEqual({h.cwe for h in hits}, {'CWE-639', 'CWE-862'})
+        js = """app.get('/admin/a', handler);
+app.get('/admin/b', authMiddleware, handler);"""
+        hits, rows = routes.detect('app.js', js)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual([h.line for h in hits], [1])
+
+    def test_dynamic_cookie_policy_and_similar_names(self):
+        code = '''BACKUP_SESSION_COOKIE_SECURE = False
+response.set_cookie("session", value, secure=True, httponly=True, samesite=policy)
+app.config["SESSION_COOKIE_SECURE"] = False
+response.set_cookie("session", value, secure=False, **policy)
+CORS(app, resources=policy)
+CORS(app, **policy)
+app.config["DEBUG"] = True
+'''
+        hits, _ = config.detect('app.py', code)
+        self.assertCountEqual([h.line for h in hits], [3, 4, 7])
+
     def test_checklist_never_claims_unsupported_or_dismissed_safe(self):
         rows = checklist([], {'java': 2}, [])
         self.assertEqual(len(rows), 25)

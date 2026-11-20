@@ -25,12 +25,15 @@ def detect(name, content):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             for target in targets:
                 key = ast.unparse(target)
+                setting = (target.slice.value if isinstance(target, ast.Subscript) and isinstance(target.slice, ast.Constant)
+                           else target.attr if isinstance(target, ast.Attribute) else key)
                 if isinstance(node.value, ast.Constant):
                     value = node.value.value
-                    if key == 'DEBUG' and value is True:
+                    if setting == 'DEBUG' and value is True:
                         add(node, 'debug', ['CI-04'], 'CWE-489', '디버그 설정 활성화', '배포 환경에서는 디버그를 끄세요.', True)
-                    elif any(k in key for k in ('SESSION_COOKIE_SECURE', 'SESSION_COOKIE_HTTPONLY', 'CSRF_COOKIE_SECURE')) and value is False:
-                        add(node, 'cookie-flags', ['CI-16', 'CI-18'], 'CWE-614', '쿠키 보호 속성 비활성화',
+                    elif setting in ('SESSION_COOKIE_SECURE', 'SESSION_COOKIE_HTTPONLY', 'CSRF_COOKIE_SECURE') and value is False:
+                        cwe = 'CWE-1004' if setting == 'SESSION_COOKIE_HTTPONLY' else 'CWE-614'
+                        add(node, 'cookie-flags', ['CI-16', 'CI-18'], cwe, '쿠키 보호 속성 비활성화',
                             '인증 쿠키에 Secure·HttpOnly·SameSite 정책을 적용하세요.', False)
         if not isinstance(node, ast.Call):
             continue
@@ -39,25 +42,29 @@ def detect(name, content):
         literal = {k: v.value for k, v in kwargs.items() if isinstance(v, ast.Constant)}
         if function.endswith(('.run', 'FastAPI', 'Starlette')) and literal.get('debug') is True:
             add(node, 'debug', ['CI-04'], 'CWE-489', '디버그 모드 활성화', '배포 환경에서는 디버그를 끄세요.', True)
-        if function.endswith(('CORS', 'add_middleware')):
-            cors = function.endswith('CORS') or any('CORSMiddleware' in ast.unparse(a) for a in node.args)
+        callee = function.rsplit('.', 1)[-1]
+        if callee in ('CORS', 'add_middleware'):
+            cors = callee == 'CORS' or any(ast.unparse(a).rsplit('.', 1)[-1] == 'CORSMiddleware' for a in node.args)
             origin = kwargs.get('allow_origins', kwargs.get('origins'))
+            default_wildcard = callee == 'CORS' and 'resources' not in kwargs and all(k.arg for k in node.keywords)
             try:
-                origin = ast.literal_eval(origin) if origin is not None else '*' if function.endswith('CORS') else None
+                origin = ast.literal_eval(origin) if origin is not None else '*' if default_wildcard else None
             except (ValueError, TypeError):
                 origin = None
-            if cors and (origin == '*' or isinstance(origin, list) and '*' in origin):
+            if cors and (origin == '*' or isinstance(origin, (list, tuple)) and '*' in origin):
                 add(node, 'cors', ['V-02', 'CI-05'], 'CWE-942', '와일드카드 CORS 설정',
                     '공개 API인지 확인하고 인증 응답은 신뢰한 Origin만 허용하세요.', '*')
         if function.endswith('.set_cookie'):
             # Explicit **kwargs may contain the flags; absence cannot be established there.
-            if any(k.arg is None for k in node.keywords):
-                continue
-            missing = [k for k in ('secure', 'httponly') if k not in kwargs or literal.get(k) is False]
-            if 'samesite' not in kwargs or literal.get('samesite') in (None, 'None', 'none'):
+            unknown_flags = any(k.arg is None for k in node.keywords) or len(node.args) > 2 or any(
+                isinstance(arg, ast.Starred) for arg in node.args)
+            missing = [k for k in ('secure', 'httponly') if literal.get(k) is False or
+                       (k not in kwargs and not unknown_flags)]
+            if ('samesite' not in kwargs and not unknown_flags) or ('samesite' in literal and literal['samesite'] is None):
                 missing.append('samesite')
             if missing:
-                add(node, 'cookie-flags', ['CI-16', 'CI-18'], 'CWE-614', '쿠키 보호 속성 확인 필요',
+                cwe = 'CWE-614' if 'secure' in missing else 'CWE-1004' if 'httponly' in missing else 'CWE-1275'
+                add(node, 'cookie-flags', ['CI-16', 'CI-18'], cwe, '쿠키 보호 속성 확인 필요',
                     '인증 쿠키인지 확인하고 Secure·HttpOnly·SameSite 속성을 명시하세요.', ', '.join(missing))
                 hits[-1].severity = Severity.MEDIUM
     return hits, summary

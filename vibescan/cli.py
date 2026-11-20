@@ -121,7 +121,11 @@ def scan(repo, output, directory, offline=False, trigger=Trigger.MANUAL, progres
         source = Path(temp)
         commit, branch, files = snapshot(repo, source)
         progress(0, f"파일 {len(files)}개 수집 · 커밋 {commit[:12]}")
-        if not files and not getattr(files, "sensitive_files", []):
+        previous = baseline(directory / "scan-history.sqlite3", repo, output)
+        exclusions = getattr(files, 'excluded', set())
+        excluded_previous = {f.location.file for f in previous.findings
+                             if f.change != Change.FIXED and f.location.file in exclusions} if previous else set()
+        if not (files or getattr(files, 'sensitive_files', []) or getattr(files, 'skipped', []) or excluded_previous):
             raise ScanInputError("제외 규칙 적용 후 검사 가능한 텍스트 파일이 없습니다.")
         app = profile(source, files)
         progress(1, f"정찰 완료 · {app.framework or '프레임워크 미확인'} · 라우트 {app.routes}개")
@@ -152,20 +156,20 @@ def scan(repo, output, directory, offline=False, trigger=Trigger.MANUAL, progres
         findings = inspect(source, files)
         progress(3, f"발견 후보 {len(findings)}건")
         findings.sort(key=lambda f: (list(Severity).index(f.severity), f.confidence != "Likely", f.id))
-        partial = getattr(findings, 'partial_files', [])
+        partial = sorted(set(getattr(findings, 'partial_files', [])) | excluded_previous)
         # Compare before the model review, so a background scan can send only what this commit introduced.
         progress(4, "직전 스캔과 비교하는 중")
-        previous = baseline(directory / "scan-history.sqlite3", repo, output)
         matched = compare(findings, previous, commit, partial) if previous else None
         kept, gone = matched or ([], [])
         targets = [f for f in findings if not new_high_only or
                    (f.change == Change.NEW and f.severity in (Severity.CRITICAL, Severity.HIGH))]
         if active and targets:
             count = 0
-            for start in range(0, min(len(targets), 30), 5):
-                progress(4, f"ChatGPT 검토 중 {start}/{min(len(targets), 30)}건")
+            reviewable = [f for f in targets if f.location.file in context.sources]
+            for start in range(0, min(len(reviewable), 30), 5):
+                progress(4, f"ChatGPT 검토 중 {start}/{min(len(reviewable), 30)}건")
                 try:
-                    count += analysis.review(context, targets[start:start + 5], *active)
+                    count += analysis.review(context, reviewable[start:start + 5], *active)
                 except SessionError as exc:
                     note += f" · 남은 검토는 로컬 수정안 사용 ({exc})"
                     issue = exc.kind
@@ -175,7 +179,9 @@ def scan(repo, output, directory, offline=False, trigger=Trigger.MANUAL, progres
                     issue = "error"
                     break
             note += f" · 한국어 상세 검토 {count}/{len(targets)}건" + (" (새 High 이상만)" if new_high_only else "")
-            if len(targets) > 30:
+            if len(reviewable) < len(targets):
+                note += " · 모델용 소스 문맥이 없는 항목은 로컬 판정 유지"
+            if len(reviewable) > 30:
                 note += " · 모델 검토 상한 30건, 나머지는 로컬 규칙 결과"
         elif active:
             note += " · 새로 생긴 High 이상 발견이 없어 ChatGPT 검토 생략" if new_high_only else ""
@@ -188,7 +194,7 @@ def scan(repo, output, directory, offline=False, trigger=Trigger.MANUAL, progres
     current = list(findings) + kept
     for number, f in enumerate(kept + gone, len(findings) + 1):
         f.id = f"F-{number:03}"
-    kisa_rows = checklist(findings, languages(files), partial)
+    kisa_rows = checklist(findings, languages(files), partial, carried=kept)
     coverage = legacy_coverage(coverage, kisa_rows)
     app.routes = len(getattr(findings, 'routes', [])) or app.routes
     result = ScanResult(scan_id, repo.name, datetime.now(timezone.utc), Target(str(repo)),

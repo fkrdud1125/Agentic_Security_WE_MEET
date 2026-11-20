@@ -77,6 +77,25 @@ class PipelineTests(unittest.TestCase):
                 self.assertIn("사용량", note)
         self.assertEqual(len(list_scans(state / "scan-history.sqlite3", str(self.repo))), 2)
 
+    def test_unreadable_or_excluded_source_keeps_previous_finding(self):
+        out, state = self.base / "out", self.base / "state"
+        with patch("scanner.static.semgrep", return_value=[]):
+            cli.scan(self.repo, out, state, offline=True)
+            for payload in (b"\xff", b"x" * (1024 * 1024 + 1), b"ignored"):
+                with self.subTest(size=len(payload)):
+                    (self.repo / "app.py").write_bytes(payload)
+                    if payload == b"ignored":
+                        (self.repo / ".vibescanignore").write_text("app.py\nignore.py\n.env.local\n")
+                    self.git("add", "-u")
+                    self.git("-c", "user.name=T", "-c", "user.email=t@e.invalid", "-c",
+                             "commit.gpgsign=false", "commit", "-qm", "partial")
+                    folder, _, _ = cli.scan(self.repo, out, state, offline=True)
+                    result = json.loads((folder / "scan_result.json").read_text(encoding="utf-8"))
+                    self.assertIn("app.py", result["partial_files"])
+                    self.assertEqual(result["delta"]["fixed"], 0)
+                    row = next(r for r in result["kisa_checklist"] if r["code"] == "CI-05")
+                    self.assertEqual(row["findings"], [result["findings"][0]["id"]])
+
     def test_stream_requires_completion(self):
         response = Mock()
         response.__enter__ = Mock(return_value=response)

@@ -68,6 +68,14 @@ token2 = f"prefix-secret-{설명}"
             self.assertNotIn(value, safe)
         self.assertEqual(sanitize('def invalid(:')[0], "")
 
+    def test_model_cannot_dismiss_a_finding_without_source_context(self):
+        self.finding.location.file = "api.ts"
+        with patch.object(analysis.inference, "ask") as ask:
+            count = analysis.review(self.context, [self.finding], "t", "m")
+        ask.assert_not_called()
+        self.assertEqual(count, 0)
+        self.assertEqual(self.finding.status, Status.OPEN)
+
     def test_recon_has_source_grounding_and_fixed_coverage(self):
         app = AppProfile("Flask", 1, None)
         def respond(token, model, prompt, data):

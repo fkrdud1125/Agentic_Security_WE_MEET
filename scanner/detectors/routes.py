@@ -6,7 +6,7 @@ import re
 from ..normalize import RawHit, code_identity
 
 GUARD = re.compile(r'\b(?:login_required|jwt_required|permission_classes|get_current_user|require_auth|requireAuth|isAuthenticated|authenticate|authMiddleware)\b')
-OWNER = re.compile(r'\b(?:current_user|user_id|owner_id|request\.user|req\.user)\b')
+OWNER = re.compile(r'\b(?:user_id|owner_id|ownerId|userId)\s*(?:={1,3}|:|!={1,2})\s*(?:current_user|request\.user|req\.user)\b')
 DB = re.compile(r'\.(?:execute|query|filter|get_or_404|findOne|findUnique|findById|raw)\s*\(')
 ADMIN = re.compile(r'/(?:admin|internal|manage|dashboard)(?:/|$)', re.I)
 JS_TOKENS = re.compile(r'//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|\x27(?:\\.|[^\x27\\])*\x27|`(?:\\.|[^`\\])*`')
@@ -36,13 +36,17 @@ def detect(name, content):
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-            decorators = ' '.join(ast.unparse(d) for d in node.decorator_list)
+            decorators = [d.func if isinstance(d, ast.Call) else d for d in node.decorator_list]
             # Do not let comments/docstrings pretend to be guards.
             body = ast.unparse(ast.Module(body=[n for n in node.body if not isinstance(n, ast.Expr)
                            or not isinstance(n.value, ast.Constant) or not isinstance(n.value.value, str)], type_ignores=[]))
-            guard = bool(GUARD.search(decorators + ' ' + ast.unparse(node.args)))
+            guard = any(GUARD.fullmatch(ast.unparse(d).split('.')[-1]) for d in decorators)
+            guard = guard or any(isinstance(call, ast.Call) and ast.unparse(call.func).split('.')[-1] in ('Depends', 'Security')
+                                 and call.args and GUARD.fullmatch(ast.unparse(call.args[0]).split('.')[-1])
+                                 for call in ast.walk(node.args))
             guard = guard or any(isinstance(n, ast.If) and
-                re.search(r'not (?:current_user|user\.is_authenticated)', ast.unparse(n.test)) and
+                isinstance(n.test, ast.UnaryOp) and isinstance(n.test.op, ast.Not) and
+                ast.unparse(n.test.operand) in ('current_user.is_authenticated', 'user.is_authenticated') and
                 any(isinstance(x, (ast.Return, ast.Raise)) for x in n.body) for n in node.body)
             for d in node.decorator_list:
                 if not isinstance(d, ast.Call) or not isinstance(d.func, ast.Attribute) or d.func.attr not in ('route', 'get', 'post', 'put', 'patch', 'delete'):
@@ -60,28 +64,26 @@ def detect(name, content):
     elif name.endswith(('.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs')):
         # shortcut: literal Express handlers only; mounted routers/cross-file middleware remain unknown.
         masked = JS_TOKENS.sub(lambda m: ''.join('\n' if c == '\n' else ' ' for c in m.group()), content)
-        comments = re.compile(r'//[^\n]*|/\*[\s\S]*?\*/')
         for match in re.finditer(r'''\b(?:app|router)\.(get|post|put|patch|delete)\s*\(\s*(["'])([^"']+)\2\s*,''', content):
             if not masked[match.start():match.start()+3].strip():
                 continue
-            start = masked.find('{', match.end())
-            if start < 0:
-                continue
-            depth, end = 1, start + 1
+            depth, end = 1, match.end()
             while end < len(masked) and depth:
-                depth += (masked[end] == '{') - (masked[end] == '}'); end += 1
+                depth += (masked[end] == '(') - (masked[end] == ')')
+                end += 1
             if depth:
                 continue
-            body = comments.sub('', content[start:end])
+            arguments = masked[match.end():end - 1]
             before = masked[:match.start()]
-            local = masked[match.end():start]
-            guard = bool(GUARD.search(local))
+            # A named middleware must precede another handler in this registration.
+            middleware = re.match(r'(?:\s*[\w$.]+\s*,)*', arguments).group()
+            guard = bool(GUARD.search(middleware))
             global_guard = bool(re.search(r'\bapp\.use\s*\([^;]*\b(?:auth|authenticate|requireAuth|authMiddleware)\b', before))
             rows.append(row(name, content.count('\n', 0, match.start())+1, match.group(3), match.group(1).upper(),
-                            'Express handler', body, '가드 참조' if guard else '전역 미들웨어 확인 필요' if global_guard else None))
+                            'Express handler', arguments, '가드 참조' if guard else '전역 미들웨어 확인 필요' if global_guard else None))
     hits = []
     for route in rows:
-        if ADMIN.search(route['path']) and route['auth_guard'] is None:
+        if ADMIN.search(route['path']) and route['auth_guard'] != '가드 참조':
             hits.append(RawHit('routes', 'vs-route-admin', name, route['line'], 'CWE-862', ['CI-19'],
                 '관리자 라우트의 인증 가드 미확인', '서버 인증·권한 검사를 적용하고 상위 미들웨어까지 확인하세요.'))
         if route['path_params'] and route['db_access'] and not route['ownership_check']:
