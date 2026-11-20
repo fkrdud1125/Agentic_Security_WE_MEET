@@ -171,7 +171,7 @@ def scan(repo, output, directory, offline=False, trigger=Trigger.MANUAL, progres
         partial = sorted(set(getattr(findings, 'partial_files', [])) | excluded_previous)
         # Compare before the model review, so a background scan can send only what this commit introduced.
         progress(4, "직전 스캔과 비교하는 중")
-        matched = compare(findings, previous, commit, partial) if previous else None
+        matched = compare(findings, previous, commit, partial, getattr(findings, 'credential_files', ())) if previous else None
         kept, gone = matched or ([], [])
         targets = [f for f in findings if not new_high_only or
                    (f.change == Change.NEW and f.severity in (Severity.CRITICAL, Severity.HIGH))]
@@ -214,7 +214,7 @@ def scan(repo, output, directory, offline=False, trigger=Trigger.MANUAL, progres
                         branch=branch, commit=commit, baseline_commit=previous.commit if matched else None, trigger=trigger,
                         checklist=[c['name'] for c in coverage],
                         analysis_note=note, coverage=coverage,
-                        engine={'version': '0.2.0', 'rulepack': 'vibescan-2026.11.2', 'semgrep': '1.185.0'},
+                        engine={'version': '0.2.0', 'rulepack': 'vibescan-2026.11.4', 'semgrep': '1.185.0'},
                         languages=languages(files), partial_files=partial,
                         sensitive_files=getattr(files, 'sensitive_files', []), routes=getattr(findings, 'routes', []),
                         config_summary=getattr(findings, 'config_summary', []), kisa_checklist=kisa_rows)

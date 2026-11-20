@@ -90,6 +90,52 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn("+const STRIPE_KEY = process.env.STRIPE_KEY;", hit.fix)
         self.assertNotIn(KEY, hit.fix)
 
+    def test_field_identifiers_are_not_credentials(self):
+        cases = {
+            "AdminOnlyAspect.java": 'private static final String DETAIL_EVALUATION_ERROR_KEY = "detailEvaluationError";',
+            "messages.ts": 'const CACHE_KEY = "HTTPResponseErrorV2"; // password is handled elsewhere',
+            "view.json": '{"key": "isAccountLockedByPolicy", "tokenLabel": "Choose a password"}',
+            "config.py": 'SECRET_KEY_ENV_NAME = "APPLICATION_SIGNING_KEY"\nPASSWORD_LABEL = "New password"\n'
+                         'TOKENIZER = "VocabularyModelV2"\nFIELDS_KEY = (\n "detailEvaluationError",\n)',
+        }
+        for name, source in cases.items():
+            with self.subTest(name=name):
+                self.assertEqual(secrets.detect(name, source), [])
+
+    def test_neighboring_names_do_not_weaken_credentials_or_masking(self):
+        text = ('FIELD_KEY = "detailEvaluationError"; adminPassword = "letmeinnow"\n'
+                f'ERROR_LABEL = "{KEY}"\n'
+                'signing = {"SECRET_KEY": "dev"}\n'
+                'ACCESS_KEY = "A7qaB!93dH82tTK9"\n')
+        hits = secrets.detect("config.py", text)
+        self.assertEqual([(h.line, h.rule_id) for h in hits],
+                         [(1, "literal-token"), (2, "literal-token"), (3, "weak-signing-key"), (4, "literal-token")])
+        self.assertIn("detailEvaluationError", secrets.hidden_values(text))
+        self.assertNotIn("detailEvaluationError", {h.secret for h in hits})
+
+    def test_application_keys_and_public_token_addresses(self):
+        address = '0x' + 'a1' * 20
+        source = f'''class Case {{
+            String idempotencyKey = "e2e-audit-created-" + UUID.randomUUID();
+            String orderKey = "0x{'a1' * 32}";
+            String tmpObjectKey = "uploads/admin/test/" + UUID.randomUUID() + ".png";
+            String token = "{address}";
+            String 실제password = "prefix-constant-123456" /* generated later */
+                + shortToken();
+            String secretKey = "{KEY}" + getSuffix();
+        }}'''
+        hits = secrets.detect("src/test/java/Case.java", source)
+        self.assertEqual([(h.line, h.severity.value) for h in hits], [(8, 'High')])
+        self.assertEqual(secrets.detect("app.yml", f'token-contract-address: "{address}"'), [])
+
+    def test_dynamic_password_prefix_vs_complete_literal(self):
+        source = '''class Case { void run() {
+            String password = "FixedPass1234!"
+                + uniqueToken().substring(0, 8);
+            password = "FixedPass1234!";
+        }}'''
+        self.assertEqual([h.line for h in secrets.detect("Case.java", source)], [4])
+
     def test_export_masks_short_sibling_and_clipped_secrets(self):
         from scanner.static import inspect
         long_value = "Aa19" * 60

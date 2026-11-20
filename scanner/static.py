@@ -74,6 +74,7 @@ def inspect(directory, files):
         raise ValueError('부분 실패 파일이 검사 범위 밖입니다.')
     partial += getattr(files, 'skipped', [])
     contents = {name: (directory / name).read_text(encoding='utf-8-sig') for name in files}
+    credential_files = set(contents)
     for hit in raw:
         lines = contents[hit.file].splitlines()
         if hit.line > len(lines):
@@ -98,6 +99,7 @@ def inspect(directory, files):
                 ast.parse(content)
             except (SyntaxError, ValueError):
                 partial.append(name)
+                credential_files.discard(name)
     for hit in raw:
         if hit.file in contents:
             if any('\n' in value or 'PRIVATE KEY-----' in value for value in hidden[hit.file]):
@@ -113,6 +115,7 @@ def inspect(directory, files):
                     for h in raw if h.detector == 'semgrep' and h.rule_id in
                     {'vs-js-cors', 'vs-js-cookie', 'vs-js-error'})
     result = Inspection(normalize(raw), partial, route_rows, settings)
+    result.credential_files = credential_files
     result.file_upload = any('request.files' in text or 'UploadFile' in text or 'multer' in text
                              for text in contents.values())
     return result

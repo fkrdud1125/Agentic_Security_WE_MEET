@@ -63,6 +63,15 @@ class HistoryTests(unittest.TestCase):
         previous.findings.append(old("F-006", ""))
         self.assertIsNone(compare([old("F-001", "same")], previous, "c3"))
 
+    def test_completed_credential_rule_on_partial_file(self):
+        # A skipped Java call graph does not invalidate a completed literal credential check.
+        previous = ScanResult.from_json(json.dumps(sample()))
+        base = previous.findings[0]
+        previous.findings = [replace(base, fingerprint='old-key', rule_id='literal-token')]
+        file = base.location.file
+        kept, gone = compare([], previous, 'c2', [file], {file})
+        self.assertEqual(([f.fingerprint for f in kept], [f.fingerprint for f in gone]), ([], ['old-key']))
+
     def test_commit_scan_snapshots_and_delta(self):
         data = sample()
         del data["target"], data["app_name"]

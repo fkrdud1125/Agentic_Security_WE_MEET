@@ -90,7 +90,7 @@ def evidence_files(finding):
             yield step.get('file')
 
 
-def compare(findings, previous, commit, partial_files=()):
+def compare(findings, previous, commit, partial_files=(), credential_files=()):
     """Mark findings new/existing against the previous scan; return its vanished findings as fixed.
 
     Returns None when the previous scan predates fingerprints and cannot be matched.
@@ -114,6 +114,9 @@ def compare(findings, previous, commit, partial_files=()):
     for group in before.values():
         for f in group:
             unresolved = not partial.isdisjoint(evidence_files(f))
+            if f.rule_id in ('literal-token', 'weak-signing-key') and f.location.file in credential_files:
+                # Other detectors can be partial even though this credential rule fully rescanned the file.
+                unresolved = False
             # Old reports can contain excerpts written before the current redaction rules.
             historical = replace(f, change=Change.EXISTING if unresolved else Change.FIXED,
                                  evidence='[이전 검사 위치 · 현재 커밋 근거 코드 없음]', fix_diff='',

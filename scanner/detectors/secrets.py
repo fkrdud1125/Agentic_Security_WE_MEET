@@ -4,6 +4,9 @@ import base64
 import json
 import re
 
+from tree_sitter import Language, Parser
+import tree_sitter_java
+
 from ..normalize import RawHit, code_identity
 from ..models import Severity
 
@@ -16,22 +19,78 @@ KEY = re.compile(r"(?:sk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]
 SENSITIVE = re.compile(r"api.?key|secret|password|token|credential|authorization|private.?key|(?:^|_)key$|(?:^|_)(?:pwd|dsn)$", re.I)
 ASSIGNMENT = re.compile(r'''["']?([\w.-]+)["']?\s*[:=]\s*["']([^"'\r\n]*)["']''')
 PLACEHOLDER = re.compile(r"^(?:your[-_ ].*|x{3,}|example|test|dummy|changeme|placeholder|<.*>|\$\{.*\})$", re.I)
-SIGNING = re.compile(r"secret_key|jwt_secret|session_secret", re.I)
+SIGNING = re.compile(r"(?:^|_)(?:secret_key|jwt_secret|session_secret)$")
 # A lowercase word or slug ("department", "family-lounge") is an identifier unless the line names a real credential.
 SLUG = re.compile(r"[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*")
 # People choose passwords, so even word-like values count there; keys and tokens are machine-generated.
-PASSWORDISH = re.compile(r"pass(?:word|wd)?|pwd", re.I)
+PASSWORDISH = re.compile(r"(?:^|_)(?:password|passwd|pwd|pass)$")
+METADATA = re.compile(r"(?:^|_)(?:name|label|field|header|prefix|suffix|pattern|regex|env|message|description|property|param|attribute|path|url|id|type|format|length|error|code)s?$")
+WORD = re.compile(r"(?:[A-Za-z][a-z]+\d*|[A-Z]{2,}\d*|[vV]?\d+)")
+CREDENTIAL_NAME = re.compile(r"(?:^|_)(?:key|apikey|secret|password|passwd|pwd|token|credential|authorization|dsn)s?(?:_|$)")
+IDENTIFIER_KEY = re.compile(r"(?:^|_)(?:idempotency|deduplication|cache|object|order|partition|primary|foreign|sort|map|field|lookup|translation)_key$")
+TOKEN_REFERENCE = re.compile(r"(?:^|_)token(?:_contract)?(?:_address)?$")
+AUTH_KEY = re.compile(r"(?:^|_)(?:api|access|auth|encryption|private|signing|secret|client)_key$")
+
+
+def java_dynamic_parts(source):
+    """Positions of literal operands in a concatenation with a nonliteral operand."""
+    def is_concat(node):
+        op = node.child_by_field_name('operator') if node.type == 'binary_expression' else None
+        return op is not None and op.text == b'+'
+
+    root = Parser(Language(tree_sitter_java.language())).parse(source.encode()).root_node
+    pending = [root]
+    positions = set()
+    while pending:
+        node = pending.pop()
+        if not is_concat(node):
+            pending.extend(node.named_children)
+            continue
+        operands, literals, dynamic = [node], [], False
+        while operands:
+            part = operands.pop()
+            if is_concat(part):
+                operands.extend(c for c in part.named_children if not c.is_extra)
+            elif part.type == 'parenthesized_expression':
+                operands.extend(c for c in part.named_children if not c.is_extra)
+            elif part.type == 'string_literal':
+                literals.append(tuple(part.start_point))
+            else:
+                dynamic = True
+                pending.extend(part.named_children)
+        if dynamic:
+            positions.update(literals)
+    return positions
+
+
+def assignment_name(owner):
+    # Normalize spelling for decisions only; keep the original name for evidence and redaction.
+    name = re.sub(r'([A-Z])([A-Z][a-z])', r'\1_\2', owner)
+    name = re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', name)
+    return re.sub(r'[^a-zA-Z0-9]+', '_', name).strip('_').lower()
+
+
+def mask_name(owner):
+    # Model context stays conservative even when a literal does not justify a finding.
+    return SENSITIVE.search(owner) or CREDENTIAL_NAME.search(assignment_name(owner))
 
 
 def looks_random(value):
-    """A generated key or token: long, no spaces, mixing at least two of lower/upper/digits."""
+    """Reject identifiers made of readable words before accepting mixed character classes."""
     kinds = sum(bool(re.search(p, value)) for p in ("[a-z]", "[A-Z]", "[0-9]"))
     if len(value) < 16 or kinds < 2 or re.search(r"\s", value):
         return False
+    if re.fullmatch(r'[0-9a-fA-F]{24,}', value):
+        return True
     if SLUG.fullmatch(value):
         # Lowercase words joined by -_. ("esg-strategy-2026") are names; a long mixed chunk is a hex/base32 token.
         return any(len(part) >= 12 and re.search("[a-z]", part) and re.search("[0-9]", part)
                    for part in re.split(r"[-_.]", value))
+    # Field names can be long, mixed-case and versioned, e.g. detailEvaluationErrorV2.
+    # Split acronym boundaries too (HTTPResponse); require every component to look like a word.
+    parts = re.split(r'[-_.:/]+|(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])', value)
+    if all(WORD.fullmatch(part) or part.lower() in {'v', 'a', 'i'} for part in parts):
+        return False
     return True
 # Lockfiles pair package names ("js-tokens") with versions; only vendor key formats count there.
 LOCKFILES = {"package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock",
@@ -70,7 +129,7 @@ def env_fix(name, line, value, var):
 def hidden_values(source):
     values = set(KEY.findall(source))
     values.update(m.group(2) for m in ASSIGNMENT.finditer(source)
-                  if SENSITIVE.search(m.group(1)) and m.group(2))
+                  if mask_name(m.group(1)) and m.group(2))
     return values
 
 
@@ -90,18 +149,37 @@ def detect(name, content, hidden=None):
     sample = bool(SAMPLE_PATH.search(name))
     lockfile = name.rsplit("/", 1)[-1].lower() in LOCKFILES
 
-    def add(line, value, signing=False, known=False, listed=False, why="인증정보 이름의 변수에 들어 있는 문자열", var=None,
+    def add(line, value, known=False, listed=False, why="인증정보 이름의 변수에 들어 있는 문자열", var=None,
             owner=""):
         """known: a vendor key format (sk-live…, AKIA…), a leak wherever it sits.
         listed: an item of a tuple/list/set, where plain words are vocabulary, not credentials."""
+        target = assignment_name(var or owner)
+        signing = bool(SIGNING.search(target))
         if not value or (PLACEHOLDER.fullmatch(value) and not signing):
             return
         if not signing and len(value) < 8:
             return
         if not (known or signing):
+            if not CREDENTIAL_NAME.search(target) or METADATA.search(target):
+                return
+            if IDENTIFIER_KEY.search(target):
+                return
+            if re.fullmatch(r'0x[0-9a-fA-F]{40}', value) and TOKEN_REFERENCE.search(target):
+                return
+            if target.endswith('password_hash') and value.startswith(('$2a$', '$2b$', '$2y$', '$argon2')):
+                # A hash is not evidence of an embedded plaintext login password.
+                return
+            if (target == 'key' or target.endswith('_key')) and not AUTH_KEY.search(target):
+                chunks = re.findall(r'[A-Za-z0-9]{10,}', value)
+                if not (re.fullmatch(r'[0-9a-fA-F]{24,}', value) or any(
+                    re.search('[a-z]', c) and re.search('[A-Z]', c) and re.search('[0-9]', c) for c in chunks
+                )):
+                    return
+            if target.endswith('_key') and assignment_name(value) == target.removesuffix('_key'):
+                return
             if listed and SLUG.fullmatch(value):
                 return  # vocabulary in a tuple/list, e.g. ("department", "category")
-            if not PASSWORDISH.search(f"{owner} {lines[line - 1]}") and not looks_random(value):
+            if not PASSWORDISH.search(target) and not looks_random(value):
                 return  # placeholders such as api_key="codex-oauth" or "your-api-key" are not keys
         weak = signing and len(value) < 32
         hidden.add(value)
@@ -119,21 +197,29 @@ def detect(name, content, hidden=None):
         if stronger or (previous and previous.severity == severity and (previous.fix or not var)):
             return  # keep the stronger reading of the same line, or the one that can offer a fix
         hit = RawHit('secrets', rule, name, line, 'CWE-321' if weak else 'CWE-798',
-            codes, title, '노출된 키를 교체하고 서버 환경변수 또는 비밀 저장소에서 읽으세요. 서명키는 충분한 난수를 사용하세요.',
-            severity, impact=f"{why}이 소스 코드에 그대로 들어 있습니다. 이 저장소를 볼 수 있는 사람은 누구나 값을 확인할 수 있고, "
-                             "파일에서 지워도 Git 이력에 남으므로 실제 키라면 먼저 교체해야 합니다.",
+            codes, title, '인증에 쓰이는 값인지 사용처를 확인하세요. 실제 자격증명이면 교체하고 환경변수나 비밀 저장소에서 읽으세요.',
+            severity, impact=f"{why}을 발견했습니다. 인증에 사용된다면 저장소를 읽을 수 있는 사람이 해당 값을 사용할 수 있습니다.",
             fix=env_fix(name, lines[line - 1], value, var) if var else "",
             identity=code_identity(content, line, name.endswith('.py')))
         hit.secret = value  # lets the evidence excerpt hide exactly this value
         hits[(line, rule)] = hit
-    for line, text in enumerate(content.splitlines(), 1):
+    dynamic_parts = None
+    for line, text in enumerate(lines, 1):
         for match in KEY.finditer(text):
             add(line, match.group(), known=True, why="공급자 키 형식의 값")
         if lockfile:
             continue
         for match in ASSIGNMENT.finditer(text):
-            if SENSITIVE.search(match.group(1)):
-                add(line, match.group(2), bool(SIGNING.search(match.group(1))),
+            if CREDENTIAL_NAME.search(assignment_name(match.group(1))):
+                if name.endswith('.java'):
+                    if dynamic_parts is None:
+                        dynamic_parts = java_dynamic_parts(content)
+                    quote_col = len(text[:match.start(2) - 1].encode())
+                    if (line - 1, quote_col) in dynamic_parts:
+                        if len(match.group(2)) >= 8:
+                            hidden.add(match.group(2))
+                        continue
+                add(line, match.group(2),
                     why=f"'{match.group(1)[:40]}'에 대입된 값", var=match.group(1))
     if name.endswith('.py'):
         try:
@@ -156,11 +242,6 @@ def detect(name, content, hidden=None):
             for node in sensitive_literals(tree):
                 if isinstance(node, ast.Constant):
                     add(node.lineno, node.value, listed=id(node) in listed, owner=owner.get(id(node), ""))
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(node.value, ast.Constant):
-                    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-                    if isinstance(node.value.value, str) and any(SIGNING.search(ast.unparse(t)) for t in targets):
-                        add(node.value.lineno, node.value.value, True)
         except (SyntaxError, ValueError):
             pass
     # A weak signing key is the more specific explanation for the same literal.
@@ -179,13 +260,13 @@ def sensitive_literals(tree):
         values = []
         if isinstance(node, (ast.Assign, ast.AnnAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            if any(SENSITIVE.search(ast.unparse(t)) for t in targets) and node.value is not None:
+            if any(mask_name(ast.unparse(t)) for t in targets) and node.value is not None:
                 values.append(node.value)
-        if isinstance(node, ast.keyword) and node.arg and SENSITIVE.search(node.arg):
+        if isinstance(node, ast.keyword) and node.arg and mask_name(node.arg):
             values.append(node.value)
         if isinstance(node, ast.Dict):
             values.extend(v for k, v in zip(node.keys, node.values)
-                          if isinstance(k, ast.Constant) and isinstance(k.value, str) and SENSITIVE.search(k.value))
+                          if isinstance(k, ast.Constant) and isinstance(k.value, str) and mask_name(k.value))
         for value in values:
             pending = [value]
             while pending:
