@@ -18,8 +18,9 @@ MAX_TOTAL = 64 * MAX_FILE
 
 
 class Files(list):
-    def __init__(self):
+    def __init__(self, *, committed=True):
         super().__init__()
+        self.committed = committed
         self.sensitive_files = []
         self.skipped = []
         self.excluded = set()
@@ -89,7 +90,7 @@ def plain_files(repo, source, destination):
     source = source.resolve(strict=True)
     listing = ("--work-tree", str(source), "ls-files", "-z", "--others", "--exclude-standard",
                *(f"--exclude={part}/" for part in sorted(EXCLUDED)))
-    files = Files()
+    files = Files(committed=False)
     custom = source / ".vibescanignore"
     ignores = {}
     if custom.is_file() and custom.resolve() == custom:

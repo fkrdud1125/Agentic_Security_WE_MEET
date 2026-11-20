@@ -33,7 +33,7 @@ def render(result):
     rows = [f"# 보안 진단 보고서 — {result.app_name}", "",
             f"- 커밋: `{result.commit}`", f"- 진단 일시: {result.scanned_at.isoformat()}",
             f"- 위험 점수: {result.risk_score}/100 · 검토 대상 {len(opened)}건 · 오탐 후보 {len(dismissed)}건",
-            f"- 진단 범위: 커밋된 소스의 정적 패턴 및 시크릿 검사",
+            "- 진단 범위: 수집한 소스의 정적 패턴 및 시크릿 검사",
             f"- 앱 프로파일: {result.profile.framework or '프레임워크 미확인'} · "
             f"라우트 데코레이터 {result.profile.routes}개 · {result.profile.auth or '인증 방식 미확인'}",
             f"- 모델 분석: {result.analysis_note}",
@@ -130,7 +130,7 @@ def scan(repo, output, directory, offline=False, trigger=Trigger.MANUAL, progres
     note = "로컬 규칙으로 작성"
     issue = None  # first model problem, so the dashboard can point to its fix
     active = None
-    progress(0, "커밋된 파일을 읽기 전용 사본으로 수집하는 중")
+    progress(0, "검사할 파일을 임시 폴더에 수집하는 중")
     with tempfile.TemporaryDirectory() as temp:
         source = Path(temp)
         commit, branch, files = snapshot(repo, source, folder_source=folder_source)

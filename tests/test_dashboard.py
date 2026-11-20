@@ -488,6 +488,7 @@ class DashboardTests(unittest.TestCase):
         assert_empty_history()
         self.assertEqual(latest["sensitive_files"], [{"path": ".env", "kind": "dotenv", "keys": ["AUDIT_KEY"]}])
         self.assertFalse(any(f["location"]["file"].startswith("private/") for f in latest["findings"]))
+        self.assertFalse(any(f["rule_id"] == "vs-secret-file" for f in latest["findings"]))
         self.assertNotIn("local-audit-marker", json.dumps(latest))
         self.assertEqual(latest["delta"], {"new": 0, "fixed": 1})  # the edit in the folder was picked up
         self.assertEqual(sorted(p.name for p in source.rglob("*")), before)

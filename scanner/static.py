@@ -107,7 +107,7 @@ def inspect(directory, files):
                 hit.fix = ''
             else:
                 hit.evidence = excerpt(contents[hit.file], hit.line, hidden[hit.file])
-    for entry in getattr(files, 'sensitive_files', []):
+    for entry in getattr(files, 'sensitive_files', []) if getattr(files, 'committed', True) else ():
         raw.append(RawHit('secrets', 'vs-secret-file', entry['path'], 1, 'CWE-540', ['CI-05', 'V-01'],
             '민감 파일이 Git HEAD에 포함됨', '실제 자격증명이면 교체하고 추적을 해제하세요. .gitignore 추가만으로 과거 커밋에서 삭제되지 않습니다.',
             evidence='[파일 존재만 기록 · 내용 저장/전송 없음]', identity=entry['kind']))

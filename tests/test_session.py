@@ -171,7 +171,8 @@ class SessionTests(unittest.TestCase):
         repo = self.directory / "repo"
         repo.mkdir()
 
-        def snapshot(repo, destination):
+        def snapshot(repo, destination, *, folder_source=None):
+            self.assertIsNone(folder_source)
             (destination / "app.py").write_text('API_TOKEN = "fixture-secret-Mn4Bv7Cx2Z"\n')
             return "test-commit", "main", ["app.py"]
 
