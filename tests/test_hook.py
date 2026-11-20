@@ -24,7 +24,7 @@ class HookTests(unittest.TestCase):
         self.base = Path(temp.name)
         self.repo = self.base / "repo"
         self.repo.mkdir()
-        (self.repo / "app.py").write_text('API_TOKEN = "test-credential-value"\n')
+        (self.repo / "app.py").write_text('API_TOKEN = "test-credential-Xq7Lm2Pz9W"\n')
         subprocess.run(["git", "-C", str(self.repo), "init", "-q", "-b", "main"], check=True)
         self.head = self.commit("first")
         self.hook = self.repo / ".git/hooks/post-commit"
@@ -80,7 +80,7 @@ class HookTests(unittest.TestCase):
         state = self.base / "vibescan"
         self.connect(state)
         hook.install(self.repo)
-        (self.repo / "app.py").write_text('API_TOKEN = "test-credential-newer"\n')
+        (self.repo / "app.py").write_text('API_TOKEN = "test-credential-Rs6Tu8Vw1Y"\n')
         started = time.monotonic()
         head = self.commit("second", env)
         self.assertLess(time.monotonic() - started, hook.DEBOUNCE)  # the commit did not wait for the scan

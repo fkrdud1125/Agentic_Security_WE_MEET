@@ -172,7 +172,7 @@ class SessionTests(unittest.TestCase):
         repo.mkdir()
 
         def snapshot(repo, destination):
-            (destination / "app.py").write_text('API_TOKEN = "fixture-secret-value"\n')
+            (destination / "app.py").write_text('API_TOKEN = "fixture-secret-Mn4Bv7Cx2Z"\n')
             return "test-commit", "main", ["app.py"]
 
         for invalid in (self.identity(issuer="wrong"), "malformed-token"):

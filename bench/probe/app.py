@@ -12,7 +12,7 @@ SECRET_KEY = "dev"
 # GT: P02 V-02 vulnerable
 CORS(app)
 # GT: P03 CI-05 vulnerable
-OPENAI_KEY = "synthetic-credential-98765"
+OPENAI_KEY = "oa_9fK2xQ7pL4tZ8rV1nB6cH3jD"
 # GT: P04 CI-05 vulnerable
 aws = "AKIAABCDEFGHIJKLMNOP"
 # GT: P05 CI-05 vulnerable

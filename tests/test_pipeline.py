@@ -20,7 +20,7 @@ class PipelineTests(unittest.TestCase):
         self.repo = self.base / "sample"
         self.repo.mkdir()
         self.git("init", "-q")
-        (self.repo / "app.py").write_text('API_TOKEN = "private-value-1234"\n')
+        (self.repo / "app.py").write_text('API_TOKEN = "private-value-Pq8Rs2Tu6V"\n')
         (self.repo / ".env.local").write_text("SENSITIVE")
         (self.repo / ".gitignore").write_text("exclude.py\n")
         (self.repo / "exclude.py").write_text("SENSITIVE")
@@ -185,7 +185,7 @@ class PipelineTests(unittest.TestCase):
         out, state = self.base / "out", self.base / "state"
         with patch("scanner.static.semgrep", return_value=[]):
             cli.scan(self.repo, out, state, offline=True)
-            (self.repo / "app.py").write_text('API_TOKEN = "private-value-1234"\nSECOND_KEY = "private-value-Xq7Lm2Pz9Wr4"\n')
+            (self.repo / "app.py").write_text('API_TOKEN = "private-value-Pq8Rs2Tu6V"\nSECOND_KEY = "private-value-Xq7Lm2Pz9Wr4"\n')
             self.git("add", "app.py")
             self.git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false",
                      "commit", "-qm", "second secret")
@@ -212,7 +212,7 @@ class PipelineTests(unittest.TestCase):
         repo.mkdir()
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
         blob = subprocess.check_output(["git", "-C", str(repo), "hash-object", "-w", "--stdin"],
-                                       input=b'API_TOKEN = "private-value-1234"\n').decode().strip()
+                                       input=b'API_TOKEN = "private-value-Pq8Rs2Tu6V"\n').decode().strip()
         for name in ("Config.py", "config.py"):  # made on Linux; one file on Windows and macOS
             subprocess.run(["git", "-C", str(repo), "update-index", "--add", "--cacheinfo", f"100644,{blob},{name}"], check=True)
         subprocess.run(["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",

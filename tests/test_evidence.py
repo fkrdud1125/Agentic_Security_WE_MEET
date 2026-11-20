@@ -66,6 +66,25 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(found("app.py", 'password = "letmeinnow"\n'), [1])
         self.assertEqual(found("frontend/package-lock.json", '"token": "ghp_' + "a1B2c3D4e5F6g7H8i9J0k1L2" + '"\n'), [1])
 
+    def test_reading_keys_from_the_environment_or_placeholders_is_not_a_leak(self):
+        found = lambda name, text: [h.line for h in secrets.detect(name, text + "\n")]
+        # The real key lives in a git-ignored .env; committed code only names the variable.
+        for name, text in [("app.py", 'api_key = os.environ["OPENAI_API_KEY"]'),
+                           ("app.py", 'api_key = os.getenv("OPENAI_API_KEY")'),
+                           ("app.py", "client = OpenAI(api_key=settings.openai_api_key)"),
+                           ("app.py", 'headers = {"Authorization": f"Bearer {api_key}"}'),
+                           ("api.ts", "const apiKey = process.env.OPENAI_API_KEY;"),
+                           ("api.ts", "const apiKey = import.meta.env.VITE_API_KEY;"),
+                           # A library parameter filled with a word, not a credential (seen in a real repo).
+                           ("codex.py", 'llm = ChatCodex(api_key="codex-oauth")'),
+                           ("app.py", 'OPENAI_API_KEY = "your-api-key-here"')]:
+            with self.subTest(text=text):
+                self.assertEqual(found(name, text), [])
+        # Hard-coded generated keys and human-chosen passwords are still reported.
+        self.assertEqual(found("app.py", 'API_KEY = "a8F3kQ9zL2mX7pR4tV6w"'), [1])
+        self.assertEqual(found("app.py", 'API_TOKEN = "5f4dcc3b5aa765d61d8327deb882cf99"'), [1])
+        self.assertEqual(found("app.py", 'password = (\n    "letmeinnow"\n)'), [2])  # name and value on different lines
+
     def test_secret_fix_for_javascript(self):
         hit = secrets.detect("server.js", f'const STRIPE_KEY = "{KEY}";\n')[0]
         self.assertIn("+const STRIPE_KEY = process.env.STRIPE_KEY;", hit.fix)

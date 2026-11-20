@@ -143,7 +143,7 @@ class DashboardTests(unittest.TestCase):
     def repository(self):
         repo = self.root.parent / "repo"
         repo.mkdir()
-        (repo / "app.py").write_text('API_TOKEN = "test-credential-value"\n')
+        (repo / "app.py").write_text('API_TOKEN = "test-credential-Xq7Lm2Pz9W"\n')
         subprocess.run(["git", "-C", str(repo), "init", "-q", "-b", "main"], check=True)
         self.commit(repo)
         return repo
@@ -205,7 +205,7 @@ class DashboardTests(unittest.TestCase):
         self.client.post("/api/repos", headers=self.headers, json={"path": str(repo)})
         saved = []
         # 1: first scan has nothing to compare; 2: the secret changes; 3: an unrelated commit keeps it.
-        steps = (("app.py", 'API_TOKEN = "test-credential-first"\n'), ("app.py", 'API_TOKEN = "test-credential-second"\n'),
+        steps = (("app.py", 'API_TOKEN = "test-credential-Ab3Cd5Ef7G"\n'), ("app.py", 'API_TOKEN = "test-credential-Hj8Kl2Mn4P"\n'),
                  ("notes.txt", "unrelated\n"))
         with patch("vibescan.cli.access_token") as token:
             for name, text in steps:
@@ -353,7 +353,7 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(refused.status_code, 422)
             self.assertFalse((clone / ".git/hooks/post-commit").exists())
 
-            (source / "app.py").write_text('API_TOKEN = "test-credential-newer"\n')
+            (source / "app.py").write_text('API_TOKEN = "test-credential-Rs6Tu8Vw1Y"\n')
             head = self.commit(source)
             with patch("vibescan.cli.access_token") as token:
                 self.client.post("/api/scan", headers=self.headers, json={"path": str(clone)})
@@ -456,7 +456,7 @@ class DashboardTests(unittest.TestCase):
     def test_plain_folder_is_scanned_through_a_snapshot_without_touching_it(self):
         source = self.root.parent / "바탕 화면" / "friend-site"  # non-ASCII path, read back from Git config
         source.mkdir(parents=True)
-        (source / "app.py").write_text('API_TOKEN = "test-credential-first"\n')
+        (source / "app.py").write_text('API_TOKEN = "test-credential-Ab3Cd5Ef7G"\n')
         before = sorted(p.name for p in source.rglob("*"))
         response = self.client.post("/api/repos", headers=self.headers, json={"path": str(source)})
         self.assertEqual(response.status_code, 200, response.text)
@@ -469,7 +469,7 @@ class DashboardTests(unittest.TestCase):
         self.assertIsNone(listed[0]["hook"])
 
         with patch("vibescan.cli.access_token") as token:
-            for text in ('API_TOKEN = "test-credential-first"\n', 'print("clean")\n'):
+            for text in ('API_TOKEN = "test-credential-Ab3Cd5Ef7G"\n', 'print("clean")\n'):
                 (source / "app.py").write_text(text)
                 self.client.post("/api/scan", headers=self.headers, json={"path": repo})
                 job = self.wait_scan()

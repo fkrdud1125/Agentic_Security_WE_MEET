@@ -65,11 +65,11 @@ class HardeningTests(unittest.TestCase):
 
     def test_real_broken_source_retains_other_file_findings(self):
         (self.root / 'broken.js').write_text('const = ; eval(req.query.q);\n', encoding='utf-8')
-        (self.root / 'good.py').write_text('API_TOKEN="private-regression-value"\n', encoding='utf-8')
+        (self.root / 'good.py').write_text('API_TOKEN="private-regression-K9j8H7g6F5"\n', encoding='utf-8')
         found = inspect(self.root, ['broken.js', 'good.py'])
         self.assertIn('broken.js', found.partial_files)
         self.assertTrue(any(f.location.file == 'good.py' for f in found))
-        self.assertNotIn('private-regression-value', repr(found))
+        self.assertNotIn('private-regression-K9j8H7g6F5', repr(found))
 
     def test_typescript_rules_and_template_scope(self):
         (self.root / 'api.ts').write_text('const q: string = req.query.q;\ndb.query(`SELECT * FROM notes WHERE id=${q}`);\n', encoding='utf-8')

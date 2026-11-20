@@ -19,7 +19,20 @@ PLACEHOLDER = re.compile(r"^(?:your[-_ ].*|x{3,}|example|test|dummy|changeme|pla
 SIGNING = re.compile(r"secret_key|jwt_secret|session_secret", re.I)
 # A lowercase word or slug ("department", "family-lounge") is an identifier unless the line names a real credential.
 SLUG = re.compile(r"[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*")
-STRONG = re.compile(r"pass(?:word|wd)?|pwd|secret|token|credential|api.?key|private.?key|auth", re.I)
+# People choose passwords, so even word-like values count there; keys and tokens are machine-generated.
+PASSWORDISH = re.compile(r"pass(?:word|wd)?|pwd", re.I)
+
+
+def looks_random(value):
+    """A generated key or token: long, no spaces, mixing at least two of lower/upper/digits."""
+    kinds = sum(bool(re.search(p, value)) for p in ("[a-z]", "[A-Z]", "[0-9]"))
+    if len(value) < 16 or kinds < 2 or re.search(r"\s", value):
+        return False
+    if SLUG.fullmatch(value):
+        # Lowercase words joined by -_. ("esg-strategy-2026") are names; a long mixed chunk is a hex/base32 token.
+        return any(len(part) >= 12 and re.search("[a-z]", part) and re.search("[0-9]", part)
+                   for part in re.split(r"[-_.]", value))
+    return True
 # Lockfiles pair package names ("js-tokens") with versions; only vendor key formats count there.
 LOCKFILES = {"package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock",
              "pipfile.lock", "uv.lock", "cargo.lock", "composer.lock", "gemfile.lock", "go.sum"}
@@ -74,15 +87,19 @@ def detect(name, content):
     sample = bool(SAMPLE_PATH.search(name))
     lockfile = name.rsplit("/", 1)[-1].lower() in LOCKFILES
 
-    def add(line, value, signing=False, known=False, listed=False, why="인증정보 이름의 변수에 들어 있는 문자열", var=None):
+    def add(line, value, signing=False, known=False, listed=False, why="인증정보 이름의 변수에 들어 있는 문자열", var=None,
+            owner=""):
         """known: a vendor key format (sk-live…, AKIA…), a leak wherever it sits.
         listed: an item of a tuple/list/set, where plain words are vocabulary, not credentials."""
         if not value or (PLACEHOLDER.fullmatch(value) and not signing):
             return
         if not signing and len(value) < 8:
             return
-        if not (known or signing) and SLUG.fullmatch(value) and (listed or not STRONG.search(lines[line - 1])):
-            return
+        if not (known or signing):
+            if listed and SLUG.fullmatch(value):
+                return  # vocabulary in a tuple/list, e.g. ("department", "category")
+            if not PASSWORDISH.search(f"{owner} {lines[line - 1]}") and not looks_random(value):
+                return  # placeholders such as api_key="codex-oauth" or "your-api-key" are not keys
         weak = signing and len(value) < 32
         rule = 'weak-signing-key' if weak else 'literal-token'
         codes = ['CI-16'] if weak else ['CI-05']
@@ -119,9 +136,22 @@ def detect(name, content):
             tree = ast.parse(content)
             listed = {id(item) for node in ast.walk(tree) if isinstance(node, (ast.Tuple, ast.List, ast.Set))
                       for item in node.elts}
+            # The name a value is assigned to, even when the value sits on a later line.
+            owner = {}
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+                    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                    names = " ".join(ast.unparse(t) for t in targets)
+                    owner.update((id(c), names) for c in ast.walk(node.value))
+                elif isinstance(node, ast.keyword) and node.arg:
+                    owner.update((id(c), node.arg) for c in ast.walk(node.value))
+                elif isinstance(node, ast.Dict):
+                    for key, item in zip(node.keys, node.values):
+                        if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                            owner.update((id(c), key.value) for c in ast.walk(item))
             for node in sensitive_literals(tree):
                 if isinstance(node, ast.Constant):
-                    add(node.lineno, node.value, listed=id(node) in listed)
+                    add(node.lineno, node.value, listed=id(node) in listed, owner=owner.get(id(node), ""))
             for node in ast.walk(tree):
                 if isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(node.value, ast.Constant):
                     targets = node.targets if isinstance(node, ast.Assign) else [node.target]

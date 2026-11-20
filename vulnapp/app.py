@@ -5,7 +5,7 @@ from flask import Flask, jsonify, make_response
 app = Flask(__name__)
 
 # 정적 분석의 기준값으로만 쓰는 가짜 토큰이다.
-DEMO_API_TOKEN = "we_meet_fixture_token_0000000000"
+DEMO_API_TOKEN = "wm_demo_Tk7Qp2Lx9Vr4Nz6Bc8Hd"
 
 
 @app.get("/")

@@ -193,7 +193,7 @@ token2 = f"prefix-secret-{설명}"
 
     def test_multiline_and_mapping_credentials_are_detected_locally(self):
         from scanner.static import inspect
-        (self.root / "credentials.py").write_text('password = (\n"multiline-secret"\n)\nconfig = {"token": "dict-secret-value"}\n')
+        (self.root / "credentials.py").write_text('password = (\n"multiline-secret"\n)\nconfig = {"token": "dict-secret-Zx9Cv8Bn7M"}\n')
         with patch("scanner.static.semgrep", return_value=[]):
             findings = inspect(self.root, ["credentials.py"])
         self.assertEqual([f.location.line for f in findings], [2, 4])
@@ -201,12 +201,12 @@ token2 = f"prefix-secret-{설명}"
 
     def test_environment_variable_names_are_not_literal_credentials(self):
         from scanner.static import inspect
-        source = 'import os\nAPI_TOKEN = os.environ["API_TOKEN"]\npassword = os.getenv("PASSWORD")\nsecret = os.environ.get("SECRET", "fallback-secret-value")\n'
+        source = 'import os\nAPI_TOKEN = os.environ["API_TOKEN"]\npassword = os.getenv("PASSWORD")\nsecret = os.environ.get("SECRET", "fallback-secret-Q1w2E3r4T5")\n'
         (self.root / "environment.py").write_text(source)
         safe, _ = sanitize(source)
         self.assertIn('os.environ["API_TOKEN"]', safe)
         self.assertIn('os.getenv("PASSWORD")', safe)
-        self.assertNotIn("fallback-secret-value", safe)
+        self.assertNotIn("fallback-secret-Q1w2E3r4T5", safe)
         with patch("scanner.static.semgrep", return_value=[]):
             findings = inspect(self.root, ["environment.py"])
         self.assertEqual([f.location.line for f in findings], [4])
