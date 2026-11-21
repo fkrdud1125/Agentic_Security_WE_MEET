@@ -6,7 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from model_answers import plan_answer, review_answer
+from model_answers import review_answer
 from scanner.detectors import secrets
 from vibescan import cli, inference
 
@@ -48,8 +48,9 @@ class EvidenceTests(unittest.TestCase):
         with patch("scanner.static.semgrep", return_value=[]), \
                 patch.object(cli, "access_token", return_value="t"), \
                 patch.object(inference, "model_for", return_value="m"), \
-                patch.object(inference, "ask", side_effect=[plan_answer(), review_answer([{"id": "F-001", "severity": "High"}])]) as ask:
+                patch.object(inference, "ask", return_value=review_answer([{"id": "F-001", "severity": "High"}])) as ask:
             cli.scan(self.repo, self.base / "out", self.base / "state")
+        ask.assert_called_once()
         sent = json.dumps([call.args for call in ask.call_args_list], ensure_ascii=False)
         self.assertNotIn("sk_l", sent)
         self.assertNotIn("# billing client", sent)  # comments are stripped from model context

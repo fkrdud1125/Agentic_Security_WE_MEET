@@ -6,7 +6,13 @@ The generated fixture is test data; it never reads or scans a user's repositorie
 import argparse
 import copy
 import json
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from scanner.criteria import build_criteria, finding_codes
+from scanner.kisa import checklist
+from scanner.models import Finding
 
 
 def samples():
@@ -24,13 +30,15 @@ def samples():
         ("Info", "운영 환경의 HTTPS 적용 여부 확인 필요", "config/server.py", 9),
         ("Info", "백업 데이터 접근 제어 수동 확인 필요", "app/services/backup.py", 72),
     ]
+    cwes = ["CWE-89", "CWE-862", "CWE-22", "CWE-614", "CWE-942", "CWE-209", "CWE-384", "CWE-307", "CWE-434", "CWE-778", "CWE-319", "CWE-540"]
+    aliases = ["CI-02", "CI-11", "CI-15", "CI-18", "V-02", "CI-04", "CI-16", "CI-20", "CI-14", "", "CI-17", "CI-05"]
     findings = []
     for index, (severity, title, file, line) in enumerate(titles):
         findings.append(dict(
             id=f"F-{index + 1:03}", title=title, severity=severity, confidence="Likely",
             status="open", change="new" if index == 0 else "existing", introduced_in="a1b2c3d4",
             original_severity=severity, location=dict(file=file, line=line),
-            cwe="CWE-89" if index == 0 else "CWE-284", owasp="A03:2021" if index == 0 else "A01:2021",
+            cwe=cwes[index], kisa=[aliases[index]] if aliases[index] else [], owasp="",
             evidence='query = "SELECT * FROM notes WHERE title = \'" + title + "\'"\nrows = db.execute(query)',
             how_found=["정적 규칙 탐지", "사용자 입력에서 쿼리 실행까지의 흐름 확인"],
             impact_ko="사용자가 입력한 값이 SQL 구문의 일부로 합쳐집니다. 공격자가 쿼리 구조를 바꾸면 허용되지 않은 데이터를 조회할 수 있습니다.",
@@ -54,13 +62,19 @@ def samples():
     common = dict(
         repo=dict(name="vulnapp", path="C:/demo/vulnapp", branch="main"), commit="a1b2c3d4e5f6",
         baseline_commit="8f20c6a12345", risk_score=100, findings=findings, summary=summary,
-        delta=dict(new=1, fixed=3), dismissed_count=2, analysis_note="모델 점검 계획 적용 · 한국어 상세 검토 12/12건",
+        delta=dict(new=1, fixed=3), dismissed_count=2, analysis_note="로컬 정적 검사 · AI 2차 검토 3/12건 · 화면 검증용 데이터",
         profile=dict(framework="Flask", routes=8, auth="세션 인증", limitations=["정적 검사 결과이며 안전을 보증하지 않습니다.", "실제 실행 환경과 권한 정책은 수동 확인이 필요합니다."]),
         coverage=[dict(name=name, execution="manual" if i == 4 else "completed", reason="자동 점검 범위 확인" if i != 4 else "실행 환경 확인 필요")
                   for i, name in enumerate(["입력값 처리", "인증·권한", "비밀값", "보안 설정", "배포 환경"])],
         report_md="# VibeScan 데모 보고서\n\n실제 진단 결과가 아닌 화면 검증용 데이터입니다.",
         trigger="git-hook", scan_type="full",
     )
+    modeled = [Finding(**finding) for finding in findings]
+    rows = checklist(modeled, {"python": 8}, [])
+    review_states = {finding.id: "completed" if finding.id in {"F-001", "F-002", "F-003"} else "skipped" for finding in modeled}
+    common["criteria"] = build_criteria(rows, modeled, review_states=review_states)
+    for finding, modeled_finding in zip(findings, modeled):
+        finding["owasp"] = ", ".join(finding_codes(modeled_finding)["owasp"])
     scans = []
     for i, score in enumerate([66, 75, 61, 84, 67, 73, 60, 100]):
         scan = copy.deepcopy(common)
@@ -73,9 +87,11 @@ def samples():
                  scanned_at="2026-11-20T00:00:00Z", findings=[], risk_score=0,
                  summary={key: 0 for key in summary}, delta=dict(new=0, fixed=0), analysis_note="로컬 규칙으로 작성",
                  dismissed_count=0, trigger="manual", baseline_commit=None)
+    clean["criteria"] = build_criteria(checklist([], {"python": 3}, []), [], review_states={})
     failed = copy.deepcopy(common)
     failed.update(scan_id="ai-failed", repo=dict(name="legacy-api", path="C:/demo/legacy", branch="develop"),
-                  scanned_at="2026-11-19T00:00:00Z", analysis_note="모델 분석 확인 실패 · 로컬 규칙 결과 유지")
+                  scanned_at="2026-11-19T00:00:00Z", analysis_note="AI 연결 실패 · 로컬 규칙 결과 유지")
+    failed["criteria"] = build_criteria(rows, modeled, review_states={f.id: "failed" for f in modeled})
     return sorted(scans + [clean, failed], key=lambda scan: scan["scanned_at"], reverse=True)
 
 
@@ -99,7 +115,7 @@ window.fetch = async (url, options={}) => {
     else data={repos:demoRepos};
   } else if (url === "/api/scans") data={scans:previewEmpty?[]:demoScans,results_path:"C:/demo/results"};
   else if (url.startsWith("/api/scans/")) data=demoScans.find(s=>s.scan_id===url.split("/").pop());
-  else if (url === "/api/scan") data={state:"idle",stages:["코드 수집","정찰","점검 계획","정적 검사","검토·보고서"]};
+  else if (url === "/api/scan") data={state:"idle",stages:["코드 수집","구조 분석","정적 검사","AI 2차 검토","결과·보고서 저장"]};
   else if (url === "/api/latest") data={scan_id:previewEmpty?null:"demo-7"};
   else if (url === "/api/auth") data={state:"ready",message:"ChatGPT 연결됨 · 화면 검증용",login:{state:"idle"}};
   else if (url === "/api/settings") data={background_llm:false};

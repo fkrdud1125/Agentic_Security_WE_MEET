@@ -3,6 +3,7 @@
 import json
 import os
 import sqlite3
+import ssl
 import sys
 import time
 from contextlib import closing, contextmanager
@@ -14,7 +15,12 @@ import requests
 ISSUER = "https://auth.openai.com"
 RESOURCE = "https://api.openai.com/v1"
 PLAN = "chatgpt.tokens.use.direct"
-JWKS = jwt.PyJWKClient(ISSUER + "/.well-known/jwks.json", timeout=10)
+# PyJWT uses urllib, whose system CA store can be empty on macOS Python installs.
+# Use the same trusted CA bundle as requests while retaining TLS/hostname checks.
+JWKS = jwt.PyJWKClient(
+    ISSUER + "/.well-known/jwks.json", timeout=10,
+    ssl_context=ssl.create_default_context(cafile=requests.certs.where()),
+)
 
 
 class SessionError(RuntimeError):

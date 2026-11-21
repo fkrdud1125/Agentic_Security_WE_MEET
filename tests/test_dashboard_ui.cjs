@@ -105,7 +105,85 @@ const sample = (id = "scan-a", repo = "C:/a", findings = []) => {
     delta: {new: 1, fixed: 1}, baseline_commit: "previous", analysis_note: "로컬 규칙으로 작성",
     profile: {routes: 2, limitations: ["자동 검사는 안전 보증이 아닙니다."]}, coverage: [], report_md: "# 보고서"};
 };
+function criteriaFixture() {
+  const kisa = ["CI", "SI", "DI", "EP", "IL", "XS", "CF", "SF", "BF", "IA", "IN", "PR", "PV", "FU", "FD", "IS", "SN", "CC", "AE", "AU", "WM"];
+  return [...Array.from({length: 10}, (_, i) => ({framework: "owasp", code: `A${String(i + 1).padStart(2, "0")}:2025`, name: "OWASP 기준 " + (i + 1)})),
+    ...kisa.map(code => ({framework: "kisa", code, name: code === "SI" ? "SQL 인젝션" : "주통기 " + code}))]
+    .map(row => ({...row, execution: "manual", outcome: "unassessed", findings: [], dismissed: [],
+      reason: "운영 환경을 추가 확인해야 합니다.", criteria: "서버 측 검증 확인", source: "기준 문서",
+      ai: {state: "skipped", reviewed: 0, total: 0}}));
+}
 async function main() {
+  const criteriaUI = harness(), criteria = criteriaFixture();
+  const linked = finding("sql", "High", {evidence: "<script>alert(1)</script>", remediation_ko: "매개변수 바인딩을 사용하세요."});
+  for (const row of criteria.filter(row => ["SI", "A05:2025"].includes(row.code))) {
+    Object.assign(row, {execution: "partial", outcome: "candidate", findings: ["sql"],
+      reason: "<img src=x onerror=alert(1)> · 일부 언어만 검사", ai: {state: "completed", reviewed: 1, total: 1}});
+  }
+  criteria[1].execution = "completed"; criteria[1].outcome = "no_findings";
+  criteria[9].execution = "unknown";
+  criteriaUI.seed({...sample("criteria", "C:/a", [linked]), criteria});
+  const cover = criteriaUI.get("coverage");
+  assert.equal(cover.children.length, 2);
+  assert.equal(cover.children[0].dataset.framework, "owasp");
+  assert.equal(cover.children[1].dataset.framework, "kisa");
+  assert.equal(cover.children[0].querySelectorAll(".criterion-row").length, 10);
+  assert.equal(cover.children[1].querySelectorAll(".criterion-row").length, 21);
+  assert.match(criteriaUI.get("criteria-overview-groups").textContent, /10개 기준.*21개 기준/);
+  assert.match(criteriaUI.get("criteria-overview-note").textContent, /중복 합산하지 않습니다/);
+  assert.match(cover.textContent, /부분 점검/);
+  assert.match(cover.textContent, /수동·동적 확인 필요/);
+  assert.match(cover.textContent, /정적 범위 내 미발견/);
+  assert.match(cover.textContent, /검사 기록 없음/);
+  assert.match(cover.textContent, /AI 검토 완료 · 1\/1건/);
+  assert.equal(criteriaUI.run('criterionAiText({ai:{state:"unknown",reviewed:0,total:4}})'), "AI 기준별 기록 없음 · 연결된 발견 4건");
+  assert.equal(criteriaUI.get("findings").children.length, 1); // the same finding in two standards is still one task
+  await criteriaUI.get("show-criteria").click();
+  assert.equal(criteriaUI.get("coverage-section").hidden, false);
+  assert.equal(criteriaUI.get("findings-label").textContent, "기준별 점검 현황");
+  const sqlRow = cover.querySelectorAll(".criterion-row").find(row => row.dataset.code === "SI");
+  sqlRow.open = true; sqlRow.handlers.toggle();
+  assert.match(sqlRow.textContent, /sql · 문제 sql/);
+  const proof = sqlRow.querySelector(".location-detail");
+  proof.open = true; proof.handlers.toggle();
+  assert.match(proof.textContent, /<script>alert\(1\)<\/script>/);
+  assert.match(proof.textContent, /매개변수 바인딩/);
+  assert.match(sqlRow.textContent, /<img src=x onerror=alert\(1\)>/); // text only; harness rejects innerHTML
+  const manualRow = cover.querySelectorAll(".criterion-row").find(row => row.dataset.code === "BF");
+  manualRow.open = true; manualRow.handlers.toggle();
+  assert.match(manualRow.textContent, /발견 근거가 없습니다/);
+  const runningCriteria = criteria.map(row => ({...row, execution: row.execution === "partial" ? "running" : row.execution}));
+  criteriaUI.context.liveCriteria = runningCriteria;
+  criteriaUI.run('renderProgress("스캔 중", {stage:2,criteria:liveCriteria,log:[]})');
+  assert.equal(criteriaUI.get("criteria-progress-rows").querySelectorAll(".criterion-row").length, 31);
+  assert.match(criteriaUI.get("criteria-progress-rows").textContent, /정적 검사 중/);
+  assert.match(criteriaUI.get("criteria-progress-summary").textContent, /31\/31개 기록/);
+  criteriaUI.get("criteria-progress-rows").querySelectorAll(".criterion-row")[0].open = true;
+  criteriaUI.run('renderProgress("스캔 중", {stage:2,criteria:liveCriteria,log:[]})');
+  assert.equal(criteriaUI.get("criteria-progress-rows").querySelectorAll(".criterion-row")[0].open, true);
+  criteriaUI.run('renderProgress("", {state:"failed",message:"검사 실패",criteria:liveCriteria.map(row => ({...row,execution:"failed"})),log:[]})');
+  assert.equal(criteriaUI.get("progress-pulse").hidden, true);
+  assert.equal(criteriaUI.get("scan-controls").hidden, false);
+  assert.match(criteriaUI.get("progress-title").textContent, /최근 스캔 중단/);
+  assert.match(criteriaUI.get("criteria-progress-rows").textContent, /검사 중단/);
+  criteriaUI.seed(sample("old"));
+  assert.match(criteriaUI.get("coverage").textContent, /기준별 검사 기록이 없습니다/);
+  assert.match(criteriaUI.get("criteria-overview-note").textContent, /완료로 바꾸지 않으며/);
+  console.log("31 criteria split, independent statuses, evidence linkage, live progress, legacy gaps and safe text: OK");
+  const reviewStatus = harness();
+  for (const [note, label] of [
+    ["로컬 정적 검사 · AI 미사용 (오프라인)", "로컬 검사만"],
+    ["로컬 정적 검사 · AI 검토 생략 (검토 대상 없음)", "AI 검토 생략"],
+    ["로컬 정적 검사 · AI 검토 불가 (지원하는 Python 코드 문맥 없음)", "AI 검토 불가"],
+    ["로컬 정적 검사 · AI 2차 검토 1/1건", "AI 2차 검토 완료"],
+    ["로컬 정적 검사 · AI 2차 검토 30/32건 · 모델 검토 상한 30건, 나머지는 로컬 규칙 결과", "AI 2차 검토 일부 완료"],
+    ["로컬 정적 검사 · AI 연결 실패 · 정적 결과 유지", "AI 분석 일부 실패 ⓘ"],
+  ]) {
+    reviewStatus.seed({...sample(), analysis_note: note});
+    assert.equal(reviewStatus.get("analysis-badge").textContent, label);
+    assert.equal(reviewStatus.get("analysis-summary").textContent, note);
+  }
+  console.log("Saved AI review counts, skipped/unsupported states and failure visibility: OK");
   const h = harness(), {get, run} = h;
   const data = sample("scan-a", "C:/a", [
     finding("critical", "Critical", {status: "dismissed"}),

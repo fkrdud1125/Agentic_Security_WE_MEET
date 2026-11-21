@@ -24,8 +24,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from scanner.ingest import git
 from scanner.models import ScanResult
+from scanner.criteria import build_criteria
 from . import hook
-from .cli import STAGES, ScanInputError, scan
+from .cli import STAGES, ScanInputError, scan, render_criteria
 from .login import login
 from .register import data_dir
 from .session import logout, status
@@ -233,6 +234,16 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
 
     def run_scan(repo, offline):
         nonlocal job
+        def failed_criteria():
+            rows = []
+            for row in job.get("criteria", []):
+                updated = dict(row)
+                if row["execution"] in ("pending", "running"):
+                    updated.update(execution="failed", reason="실행 중단으로 이 항목의 검사를 완료하지 못했습니다.")
+                if row["ai"]["state"] in ("pending", "running"):
+                    updated["ai"] = dict(row["ai"], state="failed")
+                rows.append(updated)
+            return rows
         try:
             if Path(repo).is_relative_to(clones):
                 # VibeScan owns these clones, so a hard reset to the remote HEAD discards nothing of the user's.
@@ -241,7 +252,7 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
                 run_git("reset", "--hard", "--quiet", "FETCH_HEAD", cwd=repo)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
             with lock:
-                job = {"state": "failed", "repo": repo, "message": "GitHub에서 최신 커밋을 가져오지 못했습니다. "
+                job = {"state": "failed", "repo": repo, "criteria": failed_criteria(), "message": "GitHub에서 최신 커밋을 가져오지 못했습니다. "
                        "네트워크와 저장소 접근 권한을 확인하세요. 기존 결과는 유지됩니다."}
             return
         options = {}
@@ -251,15 +262,20 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
         except Exception:
             # Anything escaping here would kill the thread and leave the job "running" forever.
             with lock:
-                job = {"state": "failed", "repo": repo, "message": "원본 폴더를 읽지 못했습니다. 폴더가 옮겨졌거나 "
+                job = {"state": "failed", "repo": repo, "criteria": failed_criteria(), "message": "원본 폴더를 읽지 못했습니다. 폴더가 옮겨졌거나 "
                        "삭제되지 않았는지 확인하세요. 기존 결과는 유지됩니다."}
             return
         def report(stage, text):
             with lock:
                 job.update(stage=stage, log=(job.get("log", []) + [text])[-30:])
 
+        def report_criteria(rows):
+            with lock:
+                job["criteria"] = rows
+
         try:
-            folder, note, issue = scan(Path(repo), root, directory, offline=offline, progress=report, **options)
+            folder, note, issue = scan(Path(repo), root, directory, offline=offline, progress=report,
+                                       criteria_progress=report_criteria, **options)
             completed = {"state": "completed", "repo": repo, "scan_id": folder.name, "message": note, "issue": issue}
         except subprocess.TimeoutExpired:
             completed = {"state": "failed", "repo": repo, "message": "검사 시간이 초과되었습니다. 기존 결과는 유지됩니다."}
@@ -270,7 +286,8 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
             completed = {"state": "failed", "repo": repo,
                          "message": "스캔에 실패했습니다. Git 저장소·Semgrep 설치·저장 경로를 확인하세요. 기존 결과는 유지됩니다."}
         with lock:
-            job = completed | {"log": job.get("log", [])}
+            job = completed | {"log": job.get("log", []),
+                               "criteria": failed_criteria() if completed["state"] == "failed" else job.get("criteria", [])}
 
     @app.post("/api/scan", status_code=202)
     def start_scan(body: ScanInput):
@@ -285,13 +302,15 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
                     raise HTTPException(404, "먼저 레포를 연결하세요.")
             except (OSError, sqlite3.Error):
                 raise HTTPException(503, "레포 연결 정보를 읽을 수 없습니다.") from None
-            job = {"state": "running", "repo": repo["path"], "offline": body.offline, "stage": 0, "log": []}
+            job = {"state": "running", "repo": repo["path"], "offline": body.offline, "stage": 0, "log": [],
+                   "criteria": build_criteria(phase="pending")}
             worker = threading.Thread(target=run_scan, args=(repo["path"], body.offline))
             try:
                 worker.start()
             except RuntimeError:
                 worker = None
-                job = {"state": "failed", "message": "스캔을 시작할 수 없습니다. 다시 시도하세요."}
+                job = {"state": "failed", "message": "스캔을 시작할 수 없습니다. 다시 시도하세요.",
+                       "criteria": build_criteria(phase="failed")}
                 raise HTTPException(503, job["message"]) from None
             return dict(job)
 
@@ -307,7 +326,7 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
             data = json.loads((directory / "live.json").read_text(encoding="utf-8"))
             # A crashed hook leaves its file behind; ten quiet minutes means it is gone.
             if time.time() - data.get("updated", data["started"]) < 600 and data["repo"] in connected():
-                return {key: data[key] for key in ("repo", "commit", "stage", "log")}
+                return {key: data[key] for key in ("repo", "commit", "stage", "log")} | {"criteria": data.get("criteria", [])}
         except (OSError, ValueError, KeyError, TypeError, sqlite3.Error):
             pass
         return None
@@ -411,7 +430,14 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
             result = ScanResult.from_json(raw.decode("utf-8"))
             if result.scan_id != scan_id:
                 raise ValueError("Mismatched scan ID")
+            legacy_criteria = not result.criteria
+            if legacy_criteria:
+                # Adapt old saved results for display only: no rescan and no overwrite of historical evidence.
+                result.criteria = build_criteria(result.kisa_checklist, result.findings)
+                result.report_md += ("\n\n이전 결과의 저장된 근거로 기준표를 보충했습니다. 기준별 AI 실행 이력이 없어 "
+                                     "상단의 전체 AI 검토 수를 각 기준에 배분하지 않습니다.\n\n" + render_criteria(result.criteria))
             data = result.to_dict()
+            data["criteria_legacy"] = legacy_criteria
             data["scanned_at"] = result.scanned_at.astimezone(timezone.utc).isoformat()
             return data
         except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError):

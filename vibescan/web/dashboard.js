@@ -29,7 +29,7 @@ let result = null, scanList = [], repoList = [], stages = [];
 let selectedProject = stored("localStorage", "vibescan-project");
 let scanMode = stored("localStorage", "vibescan-mode", "local") === "ai" ? "ai" : "local";
 let taskGroups = [], activeSection = "findings";
-const sectionNames = {findings: "지금 확인할 것", later: "다음에 확인할 것", fixed: "이번 검사에서 해결됨", dismissed: "오탐 후보", coverage: "검사 범위"};
+const sectionNames = {findings: "지금 확인할 것", later: "다음에 확인할 것", fixed: "이번 검사에서 해결됨", dismissed: "오탐 후보", coverage: "기준별 점검 현황"};
 let latestSeen, detailVersion = 0, refreshVersion = 0, jobVersion = 0;
 let scanning = false, connecting = false, hookPending = false, backgroundPending = false;
 let pollTimer = null, authTimer = null, toastTimer = null, loginRequested = false, auth = null;
@@ -329,19 +329,98 @@ function filterFindings() {
     $("findings").append(node("p", text, "quiet-state"));
   }
 }
+const criterionExecution = {
+  pending: "검사 대기", running: "정적 검사 중", completed: "정적 범위 완료",
+  partial: "부분 점검", manual: "수동·동적 확인 필요", unknown: "검사 기록 없음", failed: "검사 중단",
+};
+const criterionAI = {pending: "대기", running: "검토 중", completed: "검토 완료", partial: "일부 검토",
+  skipped: "미수행", not_applicable: "검토 대상 없음", failed: "검토 실패", unknown: "기록 없음"};
+const criterionGroups = [["owasp", "OWASP Top 10 · 2025", 10], ["kisa", "주통기 웹 · 2026", 21]];
+function criterionCounts(rows) {
+  const count = state => rows.filter(row => row.execution === state).length;
+  return [count("completed") && `정적 범위 완료 ${count("completed")}`,
+    count("partial") && `부분 점검 ${count("partial")}`, count("manual") && `추가 확인 ${count("manual")}`,
+    count("pending") && `대기 ${count("pending")}`, count("running") && `검사 중 ${count("running")}`,
+    count("failed") && `중단 ${count("failed")}`, count("unknown") && `기록 없음 ${count("unknown")}`].filter(Boolean).join(" · ");
+}
+function criterionAiText(row) {
+  const ai = row.ai || {};
+  if (!ai.state || ai.state === "unknown") return `AI 기준별 기록 없음 · 연결된 발견 ${ai.total || 0}건`;
+  return `AI ${criterionAI[ai.state] || "기록 없음"} · ${ai.reviewed || 0}/${ai.total || 0}건`;
+}
+function criterionRow(row, findings, live) {
+  const detail = node("details", "", "criterion-row");
+  detail.dataset.code = row.code;
+  detail.dataset.framework = row.framework;
+  const summary = node("summary"), title = node("span", "", "criterion-title");
+  title.append(node("span", row.code, "criterion-code"), node("strong", row.name));
+  const execution = Object.hasOwn(criterionExecution, row.execution) ? row.execution : "unknown";
+  const state = node("span", criterionExecution[execution], "criterion-state " + execution);
+  const ids = row.findings || [], dismissed = row.dismissed || [];
+  const outcome = ids.length ? `취약 후보 ${ids.length}건` : row.outcome === "no_findings" ? "정적 범위 내 미발견" : "판정 보류";
+  const verdict = node("span", outcome + (dismissed.length ? ` · 오탐 후보 ${dismissed.length}건` : ""), "criterion-outcome" + (ids.length ? " candidate" : ""));
+  summary.append(title, state, verdict, node("span", criterionAiText(row), "criterion-ai"));
+  detail.append(summary, node("p", row.reason || "저장된 점검 근거가 없습니다.", "criterion-reason"));
+  detail.addEventListener("toggle", () => {
+    if (!detail.open || detail.dataset.loaded) return;
+    detail.dataset.loaded = "true";
+    if (row.criteria) detail.append(node("p", "점검 내용: " + row.criteria));
+    if (row.source) detail.append(node("p", "기준 출처: " + row.source, "criteria-help"));
+    if (live) {
+      detail.append(node("p", live === "failed" ? "이 스캔은 중단되었습니다. 아래의 기존 결과와 별개이며, 저장하지 못한 근거는 표시하지 않습니다." : "실행 중인 상태입니다. 근거와 수정 방법은 결과 저장 후 확인할 수 있습니다."));
+      return;
+    }
+    const related = findings.filter(f => [...ids, ...dismissed].includes(f.id) && findingStatus(f) !== "fixed");
+    if (!related.length) detail.append(node("p", "이 기준에 연결된 발견 근거가 없습니다. 점검 범위와 추가 확인 사유를 확인하세요."));
+    for (const f of related) {
+      detail.append(node("h4", `${f.id} · ${f.title}`), locationDetail(f));
+    }
+  });
+  return detail;
+}
+function criterionSections(rows, findings = [], live = false) {
+  if (!rows.length) return [node("p", "기준별 검사 기록이 없습니다. 새 스캔부터 항목별 진행 상태를 확인할 수 있습니다.", "notice")];
+  return criterionGroups.map(([framework, name, expected]) => {
+    const items = rows.filter(row => row.framework === framework), section = node("section", "", "criterion-group");
+    section.dataset.framework = framework;
+    section.append(node("h3", `${name} · ${items.length}/${expected}개 기준`), node("p", criterionCounts(items), "criteria-help"));
+    if (items.length !== expected) section.append(node("p", `이 결과에는 ${expected - items.length}개 기준의 기록이 없습니다.`, "notice"));
+    section.append(...items.map(row => criterionRow(row, findings, live)));
+    return section;
+  });
+}
 function renderCoverage() {
-  const checks = result.coverage || [], completed = checks.filter(c => c.execution === "completed").length;
-  $("coverage-summary").textContent = checks.length ? `검사 범위 · ${checks.length}개 점검 중 ${completed}개 완료${completed < checks.length ? ` · ${checks.length - completed}개 미완료·수동 확인` : ""}` : "검사 범위 기록 없음";
-  const execution = {completed: "✓ 자동 점검 범위 검사 완료", partial: "◐ 부분 점검 · 수동 확인 포함", manual: "◐ 수동 확인 필요 · 미검사", unsupported: "✕ 지원 소스 없음 · 미검사"};
-  $("coverage").replaceChildren(...checks.map(c => node("li", `${c.name} — ${execution[c.execution] || "✕ 검사 여부 미확인"}. ${c.reason || ""}`)));
+  const rows = result.criteria || [];
+  $("coverage-summary").textContent = rows.length ? `OWASP 10개 + 주통기 웹 21개 · ${rows.length}개 기준 기록` : "기준별 기록이 없는 이전 결과입니다.";
+  $("coverage").replaceChildren(...criterionSections(rows, result.findings || []));
+  $("criteria-overview-groups").replaceChildren(...criterionGroups.map(([framework, title, expected]) => {
+    const items = rows.filter(row => row.framework === framework), card = node("div", "", "criteria-overview-card");
+    card.append(node("h3", title), node("strong", `${expected}개 기준`, "criteria-total"),
+      node("p", items.length ? criterionCounts(items) : "검사 기록 없음"),
+      node("p", `취약 후보가 있는 기준 ${items.filter(row => (row.findings || []).length).length}개`, "criteria-help"));
+    return card;
+  }));
+  $("criteria-overview-note").textContent = rows.length ? "31개는 두 기준표의 분류 항목 수입니다. 같은 발견이 두 기준에 연결될 수 있으며, 발견 건수는 중복 합산하지 않습니다."
+    : "이전 결과에는 항목별 상태가 저장되지 않았습니다. 기존 결과를 검사 완료로 바꾸지 않으며, 새 스캔에서 31개 기준의 상태를 기록합니다.";
+  if (result.criteria_legacy) $("criteria-overview-note").textContent += " 이전 결과의 저장된 근거로 기준표를 보충했습니다. 기준별 AI 실행 기록이 없어 전체 AI 검토 수를 각 항목에 배분하지 않습니다.";
   const profile = result.profile || {};
   $("limitations").replaceChildren(...(profile.limitations || []).map(text => node("li", text)));
   $("profile").textContent = `${profile.framework || "프레임워크 미확인"} · 라우트 ${profile.routes || 0}개 · ${profile.auth || "인증 방식 미확인"}`;
 }
+
 function analysisState(d) {
   const note = d.analysis_note || "", issue = jobIssues.get(d.scan_id);
   if (issue || /실패|미완료|한도|중단|오류|모델.*못|분석.*못|검토.*못/.test(note))
     return {label: "AI 분석 일부 실패 ⓘ", className: "warning", hint: [note, issueHints[issue] || issueHints.error].filter(Boolean).join(" · ")};
+  if (note.includes("AI 검토 생략"))
+    return {label: "AI 검토 생략", className: "local", hint: note};
+  if (note.includes("AI 검토 불가"))
+    return {label: "AI 검토 불가", className: "warning", hint: note};
+  const reviewed = note.match(/AI 2차 검토 (\d+)\/(\d+)건/);
+  if (reviewed) {
+    const complete = Number(reviewed[1]) === Number(reviewed[2]);
+    return {label: complete ? "AI 2차 검토 완료" : "AI 2차 검토 일부 완료", className: complete ? "" : "warning", hint: note};
+  }
   if (/모델|ChatGPT|AI/.test(note) && !/미사용|사용하지|없음|오프라인/.test(note))
     return {label: "AI 분석 포함", className: "", hint: note};
   return {label: "로컬 검사만", className: "local", hint: note || "모델 분석 기록 없음"};
@@ -352,6 +431,7 @@ function render() {
   $("repo-meta").textContent = `${d.repo.branch || "브랜치 미확인"} · ${(d.commit || "커밋 없음").slice(0, 7)} · ${dateText(d.scanned_at)}`;
   $("analysis-badge").textContent = analysis.label; $("analysis-badge").className = "analysis-badge " + analysis.className;
   $("analysis-badge").title = analysis.hint; $("analysis-badge").hidden = false;
+  $("analysis-summary").textContent = d.analysis_note || "모델 분석 기록 없음";
   $("risk-grade").textContent = grade.label; $("risk").textContent = d.risk_score;
   $("risk-grade").className = "badge " + grade.level;
   taskGroups = groupFindings(d.findings);
@@ -364,8 +444,8 @@ function render() {
     : later ? `우선순위가 낮은 ${later}가지를 확인하세요.` : "자동 점검에서 열린 문제가 없습니다.";
   const notes = d.baseline_commit ? [fresh && `새로 발견한 문제 ${fresh}가지`, fixed.length && `해결된 문제 ${fixed.length}가지`]
     : ["이 브랜치의 현재 커밋과 비교할 이전 검사 결과가 없습니다."];
-  const incomplete = (d.coverage || []).filter(c => c.execution !== "completed").length;
-  if (incomplete) notes.push(`직접 확인할 점검 항목 ${incomplete}개`);
+  const incomplete = (d.criteria || []).filter(c => c.execution !== "completed").length;
+  if (incomplete) notes.push(`추가 확인할 기준 ${incomplete}개`);
   $("delta").textContent = notes.filter(Boolean).join(" · ") || "지난 검사와 비교해 새로 발견되거나 해결된 문제가 없습니다.";
   $("resolution").textContent = urgent + done ? `치명·높음 ${urgent + done}가지 중 ${done}가지 해결` : "";
   const latest = projectScans()[0];
@@ -408,7 +488,7 @@ function busy(running) {
   $("connect").disabled = running || connecting; $("repo-path").disabled = running || connecting;
   $("scan").disabled = running || !repo; $("scan-menu-toggle").disabled = running || !repo;
   $("scan").textContent = scanMode === "ai" && ready ? "↗ 지금 스캔 · AI" : "↗ 지금 스캔";
-  $("scan").title = repo ? (scanMode === "ai" && ready ? "AI 심층 분석" : "빠른 검사 · 로컬") : "프로젝트를 연결하면 스캔할 수 있습니다";
+  $("scan").title = repo ? (scanMode === "ai" && ready ? "정적 검사 + AI 2차 검토" : "빠른 검사 · 로컬") : "프로젝트를 연결하면 스캔할 수 있습니다";
   $("mode-ai").disabled = !ready || running; $("mode-local").disabled = running;
   $("connect-ai").hidden = ready; $("mode-local").setAttribute("aria-pressed", String(scanMode === "local"));
   $("mode-ai").setAttribute("aria-pressed", String(scanMode === "ai"));
@@ -423,14 +503,25 @@ function busy(running) {
   renderOnboarding();
 }
 function renderProgress(title, state) {
-  $("progress").hidden = !state; $("scan-controls").hidden = !!state;
+  const failed = state?.state === "failed";
+  $("progress").hidden = !state; $("scan-controls").hidden = !!state && !failed;
   if (!state) return;
-  $("progress-title").textContent = title;
+  $("progress-title").textContent = failed ? "최근 스캔 중단 · " + (state.message || "완료하지 못했습니다.") : title;
+  $("progress-pulse").hidden = failed;
+  $("progress-steps").hidden = failed;
   $("progress-steps").replaceChildren(...stages.map((name, index) => {
     const item = node("li", name, index < state.stage ? "done" : index === state.stage ? "current" : "");
     if (index === state.stage) item.setAttribute("aria-current", "step");
     return item;
   }));
+  const criteria = state.criteria || [];
+  $("criteria-progress-summary").textContent = `기준별 작업 상태 · ${criteria.length}/31개 기록`;
+  const progressRows = $("criteria-progress-rows");
+  const expanded = new Set([...progressRows.querySelectorAll(".criterion-row")]
+    .filter(row => row.open).map(row => `${row.dataset.framework}:${row.dataset.code}`));
+  progressRows.replaceChildren(...criterionSections(criteria, [], failed ? "failed" : true));
+  for (const row of progressRows.querySelectorAll(".criterion-row"))
+    row.open = expanded.has(`${row.dataset.framework}:${row.dataset.code}`);
   $("activity").replaceChildren(...(state.log || []).slice(-8).map(text => node("li", text)));
 }
 function alertNewRisks(scan) {
@@ -459,7 +550,7 @@ async function pollJob() {
     if (version !== jobVersion) return;
     stages = job.stages || stages;
     busy(job.state === "running");
-    renderProgress(`${job.repo || ""} · ${job.offline ? "빠른 검사" : "AI 심층 분석"}`, scanning ? job : job.hook || null);
+    renderProgress(`${job.repo || ""} · ${job.offline ? "빠른 검사" : "정적 검사 + AI 2차 검토"}`, scanning ? job : job.hook || (job.state === "failed" && job.repo === selectedProject ? job : null));
     if (scanning) { pollTimer = setTimeout(pollJob, 1000); return; }
     const signature = [job.state, job.scan_id, job.message].join("|");
     if (signature === lastJob) return;
@@ -479,7 +570,7 @@ async function pollJob() {
 async function startScan(mode = scanMode) {
   const repo = selectedRepo();
   if (!repo || scanning) return;
-  if (mode === "ai" && auth?.state !== "ready") { openDrawer("settings"); message("AI 심층 분석을 사용하려면 ChatGPT를 연결하세요."); return; }
+  if (mode === "ai" && auth?.state !== "ready") { openDrawer("settings"); message("AI 2차 검토를 사용하려면 ChatGPT를 연결하세요."); return; }
   scanMode = mode; remember("localStorage", "vibescan-mode", mode);
   closeScanMenu(); ++jobVersion; clearTimeout(pollTimer); busy(true);
   try { await api("/api/scan", {path: repo.path, offline: mode !== "ai"}); lastJob = ""; await pollJob(); }
@@ -510,7 +601,7 @@ async function pollLatest() {
     const job = await api("/api/scan");
     stages = job.stages || stages;
     if (job.state === "running" && !scanning) await pollJob();
-    else if (!scanning) renderProgress(job.hook ? `커밋 ${(job.hook.commit || "").slice(0, 7)} 자동 스캔 · ${job.hook.repo}` : "", job.hook || null);
+    else if (!scanning) renderProgress(job.hook ? `커밋 ${(job.hook.commit || "").slice(0, 7)} 자동 스캔 · ${job.hook.repo}` : "", job.hook || (job.state === "failed" && job.repo === selectedProject ? job : null));
     const {scan_id: id} = await api("/api/latest");
     if (id && latestSeen !== undefined && id !== latestSeen && !scanning && !scanList.some(s => s.scan_id === id)) {
       await refresh(id);  // New results in another project never change the current selection.
@@ -568,6 +659,7 @@ for (const section of Object.keys(sectionNames)) {
     heading.scrollIntoView({block: "start"});
   });
 }
+$("show-criteria").addEventListener("click", () => $("jump-coverage").click());
 $("projects").addEventListener("change", () => chooseProject($("projects").value));
 $("latest-scan").addEventListener("click", () => {
   renderHistory(); resetFilters(); selectScan();

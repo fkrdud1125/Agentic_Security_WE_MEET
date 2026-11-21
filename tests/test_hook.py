@@ -69,7 +69,7 @@ class HookTests(unittest.TestCase):
             scan.assert_not_called()
             hook.trigger(self.repo, self.head, state, wait=0)
             scan.assert_called_once_with(self.repo.resolve(), state / "scans", state, offline=True,
-                                         trigger=Trigger.GIT_HOOK, progress=ANY, new_high_only=False)
+                                         trigger=Trigger.GIT_HOOK, progress=ANY, new_high_only=False, criteria_progress=ANY)
         with patch("vibescan.cli.scan", side_effect=ValueError("검사 실패 사유")):
             hook.trigger(self.repo, self.head, state, wait=0)
         self.assertIn("검사 실패 사유", (state / "hook.log").read_text(encoding="utf-8"))

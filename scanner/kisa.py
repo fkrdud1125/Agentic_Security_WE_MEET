@@ -22,7 +22,9 @@ def checklist(findings, languages, partial_files, carried=()):
     unsupported = set(languages) & {'php', 'rb', 'go', 'kt', 'vue', 'svelte', 'astro'}
     code_languages = set(languages) & {'python', 'javascript', 'typescript', 'java'}
     for item in catalog()['items']:
-        matches = [f.id for f in (*findings, *carried) if item['code'] in f.kisa and f.status == Status.OPEN and f.change != Change.FIXED]
+        aliases = {item['code'], item.get('official_code', item['code'])}
+        matches = [f.id for f in (*findings, *carried) if aliases.intersection(f.kisa)
+                   and f.status == Status.OPEN and f.change != Change.FIXED]
         detectors = item['detectors']
         state = item['default_status']
         note = '자동 정적 검사로 전체 안전성을 판정할 수 없습니다.'
@@ -58,7 +60,8 @@ def checklist(findings, languages, partial_files, carried=()):
                 note += ' 이번 검사에서 재확인하지 못한 이전 발견을 포함합니다.'
         rows.append({'code': item['code'], 'name': item['name'], 'status': state,
                      'coverage_status': coverage_status, 'findings': matches, 'detectors': detectors, 'note': note,
-                     'criteria': item['criteria'], 'source_verified': False})
+                     'criteria': item['criteria'], 'source_verified': False,
+                     'official_code': item.get('official_code'), 'page': item.get('page')})
     return rows
 
 

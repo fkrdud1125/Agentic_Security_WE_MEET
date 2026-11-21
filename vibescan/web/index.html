@@ -16,7 +16,7 @@
     <button id="auth-chip" type="button"><span id="auth-label">ChatGPT 확인 중</span></button>
     <button id="settings-open" type="button">설정</button>
       <div id="scan-controls" class="split-wrap"><div class="split-button"><button id="scan" class="primary" type="button" disabled>↗ 지금 스캔</button><button id="scan-menu-toggle" class="primary split-toggle" type="button" aria-label="스캔 방식 선택" aria-expanded="false" aria-controls="scan-menu">⌄</button></div>
-        <div id="scan-menu" class="scan-menu" hidden><button id="mode-local" type="button"><strong>빠른 검사</strong><span>로컬 규칙으로 검사 · 기본</span></button><button id="mode-ai" type="button" disabled><strong>AI 심층 분석</strong><span>구독 사용량 차감 · 비밀값 가린 코드 일부 전송</span></button><button id="connect-ai" class="text-link" type="button">ChatGPT 연결하기 →</button></div>
+        <div id="scan-menu" class="scan-menu" hidden><button id="mode-local" type="button"><strong>빠른 검사</strong><span>로컬 규칙으로 검사 · 기본</span></button><button id="mode-ai" type="button" disabled><strong>정적 검사 + AI 2차 검토</strong><span>발견 후보의 Python 코드 검토 · 최대 30건 · 코드 일부 전송</span></button><button id="connect-ai" class="text-link" type="button">ChatGPT 연결하기 →</button></div>
       </div>
   </div>
 </header>
@@ -27,7 +27,7 @@
       <label class="history-control"><span>스캔 기록</span><select id="scan-select" aria-label="스캔 기록" disabled><option value="">기록 없음</option></select></label>
       <button id="download" class="secondary" type="button" disabled>보고서 <span aria-hidden="true">↓</span></button>
     </div>
-    <div id="progress" class="progress" hidden><div class="progress-heading"><strong id="progress-title"></strong><span class="pulse-dot" aria-hidden="true"></span></div><ol id="progress-steps"></ol><details><summary>활동 로그</summary><ul id="activity"></ul></details></div>
+    <div id="progress" class="progress" hidden><div class="progress-heading"><strong id="progress-title"></strong><span id="progress-pulse" class="pulse-dot" aria-hidden="true"></span></div><ol id="progress-steps"></ol><details id="criteria-progress"><summary id="criteria-progress-summary">기준별 작업 상태</summary><p class="criteria-help">정적 검사는 여러 기준의 규칙을 함께 실행합니다. AI 검토는 발견 후보별로 진행합니다.</p><div id="criteria-progress-rows"></div></details><details><summary>활동 로그</summary><ul id="activity"></ul></details></div>
   </header>
   <div class="main-content">
     <section id="empty" class="onboarding" hidden aria-labelledby="empty-title">
@@ -39,18 +39,23 @@
       <div id="history-notice" class="history-notice" hidden>이전 스캔 결과를 보고 있습니다. <button id="latest-scan" class="text-link" type="button">최신 결과 보기 →</button></div>
       <section class="verdict" aria-labelledby="verdict-title">
         <div class="verdict-meta"><span id="risk-grade" class="badge"></span><span class="muted" title="열린 발견의 심각도별 가중 합계 · 최대 100점">위험 점수 <b id="risk"></b> / 100</span></div>
-        <h2 id="verdict-title"></h2><p id="delta"></p>
+        <h2 id="verdict-title"></h2><p id="delta"></p><p id="analysis-summary" class="muted"></p>
+      </section>
+      <section class="criteria-overview" aria-labelledby="criteria-overview-title">
+        <div class="criteria-overview-heading"><h2 id="criteria-overview-title">기준별 점검 현황</h2><button id="show-criteria" class="text-link" type="button" aria-controls="coverage-section">31개 기준 자세히 보기 →</button></div>
+        <div id="criteria-overview-groups" class="criteria-overview-groups"></div>
+        <p id="criteria-overview-note" class="criteria-help"></p>
       </section>
       <div class="task-heading"><h2 id="findings-label" tabindex="-1">지금 확인할 것</h2><span id="resolution"></span></div>
       <label class="search" id="finding-search"><span aria-hidden="true">⌕</span><input id="search" type="search" aria-label="파일, 제목, CWE 검색" placeholder="파일, 제목, CWE 검색" autocomplete="off"><kbd>/</kbd></label>
       <div id="findings"></div>
-      <section id="coverage-section" class="coverage-details" aria-labelledby="findings-label" hidden><p id="coverage-summary"></p><ul id="coverage"></ul><ul id="limitations" class="muted"></ul><div class="detected-profile"><h3>감지한 앱 정보</h3><p id="profile"></p></div></section>
+      <section id="coverage-section" class="coverage-details" aria-labelledby="findings-label" hidden><p id="coverage-summary"></p><p class="criteria-help">검사 상태와 발견 결과는 다릅니다. ‘범위 내 미발견’은 안전 판정이 아니며, AI 검토 횟수는 기준 항목 수와 별개입니다. 항목을 펼치면 점검 범위·근거·수정 방법을 확인할 수 있습니다.</p><div id="coverage"></div><ul id="limitations" class="muted"></ul><div class="detected-profile"><h3>감지한 앱 정보</h3><p id="profile"></p></div></section>
       <nav id="section-jumps" class="section-jumps" aria-label="진단 결과 바로가기">
         <button id="jump-findings" type="button" aria-controls="findings">지금 확인</button>
         <button id="jump-later" type="button" aria-controls="findings">다음에 확인</button>
         <button id="jump-fixed" type="button" aria-controls="findings">해결됨</button>
         <button id="jump-dismissed" type="button" aria-controls="findings">오탐 후보</button>
-        <button id="jump-coverage" type="button" aria-controls="coverage-section">검사 범위</button>
+        <button id="jump-coverage" type="button" aria-controls="coverage-section">기준별 현황</button>
       </nav>
     </div>
   </div>

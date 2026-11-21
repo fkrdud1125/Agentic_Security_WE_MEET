@@ -109,11 +109,16 @@ def trigger(repo, commit, directory, wait=DEBOUNCE):
             live.update(stage=stage, log=(live["log"] + [text])[-30:], updated=time.time())
             write_live(directory, live)
 
+        def report_criteria(rows):
+            live.update(criteria=rows, updated=time.time())
+            write_live(directory, live)
+
         # shortcut: one live.json for the whole PC; with two repositories scanning at once the
         # dashboard shows whichever wrote last. Key the file by repository if that becomes common.
         try:
             folder, _, _ = scan(repo, directory / "scans", directory, offline=not use_model,
-                                trigger=Trigger.GIT_HOOK, progress=report, new_high_only=use_model)
+                                trigger=Trigger.GIT_HOOK, progress=report, new_high_only=use_model,
+                                criteria_progress=report_criteria)
         finally:
             (directory / "live.json").unlink(missing_ok=True)
         return folder

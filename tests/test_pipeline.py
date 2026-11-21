@@ -9,7 +9,7 @@ from scanner.history import list_scans
 from scanner.ingest import snapshot
 from scanner.models import ScanResult
 from vibescan import cli, inference
-from model_answers import plan_answer, review_answer
+from model_answers import review_answer
 
 
 class PipelineTests(unittest.TestCase):
@@ -52,29 +52,65 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(files, ["app.py"])
         self.assertIn("API_TOKEN", (dest / "app.py").read_text())
 
+    def test_criteria_lifecycle_report_and_ai_failure_preserve_static_work(self):
+        for offline, fail in ((True, False), (False, False), (False, True)):
+            with self.subTest(offline=offline, fail=fail):
+                updates = []
+                with patch("scanner.static.semgrep", return_value=[]), \
+                     patch.object(cli, "access_token", return_value="t"), \
+                     patch.object(inference, "model_for", return_value="m"), \
+                     patch.object(inference, "ask", side_effect=(
+                         inference.SessionError("사용량 한도", "limit") if fail else
+                         lambda *args: review_answer(args[-1]))):
+                    folder, _, _ = cli.scan(self.repo, self.base / "out", self.base / "state",
+                                             offline=offline, criteria_progress=updates.append)
+                data = json.loads((folder / "scan_result.json").read_text())
+                self.assertTrue(all(len(rows) == 31 for rows in updates))
+                row = lambda rows: next(c for c in rows if c["code"] == "IL")
+                self.assertEqual(row(updates[0])["execution"], "pending")
+                self.assertTrue(any(row(rows)["execution"] == "running" for rows in updates))
+                final = row(data["criteria"])
+                self.assertEqual(final["findings"], ["F-001"])
+                # This fixture includes a skipped binary file, so static coverage remains partial
+                # regardless of whether the optional AI review succeeds.
+                self.assertEqual(final["execution"], "partial")
+                self.assertEqual(final["ai"]["state"], "skipped" if offline else "failed" if fail else "completed")
+                self.assertEqual(final["ai"]["reviewed"], 0 if offline or fail else 1)
+                self.assertEqual(updates[-1], data["criteria"])
+                self.assertEqual(ScanResult.from_json(json.dumps(data)).criteria, data["criteria"])
+                self.assertEqual(data["report_md"], (folder / "report.md").read_text())
+                for item in data["criteria"]:
+                    self.assertIn(f"| {item['code']} · {item['name']} |", data["report_md"])
+                self.assertEqual(len([c for c in data["criteria"] if c["framework"] == "owasp"]), 10)
+                self.assertEqual(len([c for c in data["criteria"] if c["framework"] == "kisa"]), 21)
+
     def test_authenticated_pipeline_and_quota_fallback(self):
         out, state = self.base / "out", self.base / "state"
-        plan = plan_answer()
-        plan["checks"].reverse()
         review = review_answer([{"id": "F-001", "severity": "High"}])
-        # This fixture contains only a literal credential, so there are no surface points.
-        for response in ([plan, review], [inference.SessionError("사용량 한도", "limit")]):
-            with patch("scanner.static.semgrep", return_value=[]), \
+        for response, expected_issue in ((review, None), (inference.SessionError("사용량 한도", "limit"), "limit")):
+            with self.subTest(issue=expected_issue), \
+                 patch("scanner.static.semgrep", return_value=[]), \
                  patch.object(cli, "access_token", return_value="private-test-token"), \
                  patch.object(inference, "model_for", return_value="model"), \
-                 patch.object(inference, "ask", side_effect=response) as ask:
+                 patch.object(cli.analysis, "plan", return_value=cli.analysis.default_coverage()) as plan, \
+                 patch.object(inference, "ask", side_effect=[response]) as ask:
                 folder, note, issue = cli.scan(self.repo, out, state)
-            self.assertEqual(issue, None if len(response) == 2 else "limit")
+            plan.assert_not_called()
+            self.assertEqual(ask.call_count, 1)
+            self.assertEqual(issue, expected_issue)
             result = ScanResult.from_json((folder / "scan_result.json").read_text(encoding="utf-8"))
             self.assertEqual(len(result.findings), 1)
             self.assertNotIn("private-value", str(ask.call_args_list))
             self.assertNotIn("private-value", result.to_json())
             self.assertEqual(result.report_md, (folder / "report.md").read_text(encoding="utf-8"))
-            if len(response) == 2:
-                self.assertEqual([c["id"] for c in result.coverage], [c["id"] for c in plan["checks"]])
+            self.assertEqual([c["id"] for c in result.coverage],
+                             [c["id"] for c in cli.analysis.default_coverage()])
+            if expected_issue is None:
                 self.assertIn("1/1", note)
+                self.assertTrue(result.findings[0].triage_reason)
             else:
                 self.assertIn("사용량", note)
+                self.assertFalse(result.findings[0].triage_reason)
         self.assertEqual(len(list_scans(state / "scan-history.sqlite3", str(self.repo))), 2)
 
     def test_unreadable_or_excluded_source_keeps_previous_finding(self):
@@ -167,7 +203,7 @@ class PipelineTests(unittest.TestCase):
         with patch("scanner.static.semgrep", return_value=[]), \
                 patch.object(cli, "access_token", return_value="t"), \
                 patch.object(inference, "model_for", return_value="m"), \
-                patch.object(inference, "ask", side_effect=[plan_answer(), reply]):
+                patch.object(inference, "ask", return_value=reply):
             folder, _, _ = cli.scan(self.repo, self.base / "out", self.base / "state")
         data = json.loads((folder / "scan_result.json").read_text(encoding="utf-8"))
         self.assertEqual(data["risk_score"], 0)
@@ -187,9 +223,9 @@ class PipelineTests(unittest.TestCase):
         with patch.object(cli, "inspect", return_value=findings), \
                 patch.object(cli, "access_token", return_value="t"), \
                 patch.object(inference, "model_for", return_value="m"), \
-                patch.object(inference, "ask", side_effect=[plan_answer(), first, inference.SessionError("사용량 한도", "limit")]) as ask:
+                patch.object(inference, "ask", side_effect=[first, inference.SessionError("사용량 한도", "limit")]) as ask:
             folder, note, issue = cli.scan(self.repo, self.base / "out", self.base / "state")
-        self.assertEqual(ask.call_count, 3)
+        self.assertEqual(ask.call_count, 2)
         self.assertEqual(issue, "limit")
         self.assertIn("5/32", note)
         data = json.loads((folder / "scan_result.json").read_text(encoding="utf-8"))
@@ -203,27 +239,213 @@ class PipelineTests(unittest.TestCase):
         self.git("add", ".")
         self.git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c",
                  "commit.gpgsign=false", "commit", "-qm", "JS only")
-        with patch.object(cli, "access_token", return_value="t"), \
-                patch.object(inference, "model_for", return_value="m"), \
-                patch.object(inference, "ask", return_value=plan_answer()) as ask:
-            folder, _, _ = cli.scan(self.repo, self.base / "out", self.base / "state")
-        self.assertEqual(ask.call_count, 1)
+        with patch("scanner.static.semgrep", return_value=[]), \
+                patch.object(cli, "access_token") as token, \
+                patch.object(inference, "model_for") as model, \
+                patch.object(cli.analysis, "plan", return_value=cli.analysis.default_coverage()) as plan, \
+                patch.object(inference, "ask") as ask:
+            folder, _, issue = cli.scan(self.repo, self.base / "out", self.base / "state")
+        token.assert_not_called()
+        model.assert_not_called()
+        plan.assert_not_called()
+        ask.assert_not_called()
+        self.assertIsNone(issue)
         data = json.loads((folder / "scan_result.json").read_text(encoding="utf-8"))
         self.assertEqual(data["findings"], [])
         self.assertEqual({c["id"] for c in data["coverage"] if c["execution"] == "completed"}, {"secrets", "sql", "xss"})
         self.assertEqual(next(c for c in data['kisa_checklist'] if c['code']=='V-03')['status'], '수동 확인 필요')
 
-    def test_invalid_plan_still_runs_local_checks_and_review(self):
-        reply = review_answer([{"id": "F-001", "severity": "High"}])
+    def test_invalid_review_preserves_local_findings_and_saved_report(self):
         with patch("scanner.static.semgrep", return_value=[]), \
                 patch.object(cli, "access_token", return_value="t"), \
                 patch.object(inference, "model_for", return_value="m"), \
-                patch.object(inference, "ask", side_effect=[{"checks": []}, reply]):
+                patch.object(inference, "ask", return_value={"reviews": []}) as ask:
             folder, note, issue = cli.scan(self.repo, self.base / "out", self.base / "state")
-        self.assertIn("고정 점검 계획", note)
+        ask.assert_called_once()
         self.assertEqual(issue, "error")
-        self.assertIn("1/1", note)
-        self.assertEqual(len(json.loads((folder / "scan_result.json").read_text(encoding="utf-8"))["coverage"]), 5)
+        data = json.loads((folder / "scan_result.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(data["coverage"]), 5)
+        self.assertEqual(len(data["findings"]), 1)
+        self.assertEqual(data["findings"][0]["triage_reason"], "")
+        self.assertEqual(data["report_md"], (folder / "report.md").read_text(encoding="utf-8"))
+        self.assertIn(note, data["report_md"])
+        self.assertEqual(len(list_scans(self.base / "state/scan-history.sqlite3", str(self.repo))), 1)
+
+    def test_static_analysis_precedes_authentication_and_ai_review(self):
+        events = []
+        inspect = cli.inspect
+
+        def run_inspection(*args):
+            findings = inspect(*args)
+            events.append("static_complete")
+            return findings
+
+        def token(*args):
+            events.append("authenticate")
+            return "t"
+
+        def model(*args):
+            events.append("model")
+            return "m"
+
+        def answer(token, model, instruction, findings):
+            events.append("review")
+            return review_answer(findings)
+
+        with patch("scanner.static.semgrep", return_value=[]), \
+                patch.object(cli, "inspect", side_effect=run_inspection), \
+                patch.object(cli, "access_token", side_effect=token), \
+                patch.object(inference, "model_for", side_effect=model), \
+                patch.object(inference, "ask", side_effect=answer), \
+                patch.object(cli.analysis, "plan", return_value=cli.analysis.default_coverage()) as plan:
+            _, _, issue = cli.scan(self.repo, self.base / "out", self.base / "state")
+        self.assertIsNone(issue)
+        plan.assert_not_called()
+        self.assertEqual(events, ["static_complete", "authenticate", "model", "review"])
+
+    def test_offline_scan_saves_local_results_without_ai_calls(self):
+        with patch("scanner.static.semgrep", return_value=[]), \
+                patch.object(cli, "access_token") as token, \
+                patch.object(inference, "model_for") as model, \
+                patch.object(cli.analysis, "plan", return_value=cli.analysis.default_coverage()) as plan, \
+                patch.object(inference, "ask") as ask:
+            folder, _, issue = cli.scan(self.repo, self.base / "out", self.base / "state", offline=True)
+        for call in (token, model, plan, ask):
+            call.assert_not_called()
+        self.assertIsNone(issue)
+        data = json.loads((folder / "scan_result.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(data["findings"]), 1)
+        self.assertFalse(data["findings"][0]["triage_reason"])
+        self.assertEqual(data["report_md"], (folder / "report.md").read_text(encoding="utf-8"))
+
+    def test_no_reviewable_source_skips_authentication_and_keeps_finding(self):
+        from scanner.models import Confidence, Finding, Location, Severity
+        finding = Finding("F-001", "비밀값", "CWE-798", "", Severity.HIGH, Confidence.POTENTIAL,
+                          Location("app.js", 1), "[가림]", ["static:secret"], "영향", "수정", "diff")
+        with patch.object(cli, "inspect", return_value=[finding]), \
+                patch.object(cli, "access_token") as token, \
+                patch.object(inference, "model_for") as model, \
+                patch.object(cli.analysis, "plan", return_value=cli.analysis.default_coverage()) as plan, \
+                patch.object(inference, "ask") as ask:
+            folder, note, issue = cli.scan(self.repo, self.base / "out", self.base / "state")
+        for call in (token, model, plan, ask):
+            call.assert_not_called()
+        self.assertIsNone(issue)
+        data = json.loads((folder / "scan_result.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(data["findings"]), 1)
+        self.assertFalse(data["findings"][0]["triage_reason"])
+        self.assertIn("문맥", note)
+        self.assertIn(note, data["report_md"])
+
+    def test_python_source_without_extractable_context_skips_ai_connection(self):
+        source = 'BANNER = ' + repr('ordinary description ' * 400) + '\nAPI_TOKEN = "private-fixture-Pq8Rs2Tu6V"\n'
+        (self.repo / "app.py").write_text(source)
+        self.git("add", "app.py")
+        self.git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                 "-c", "commit.gpgsign=false", "commit", "-qm", "large surrounding source")
+        with patch("scanner.static.semgrep", return_value=[]), \
+                patch.object(cli, "access_token") as token, \
+                patch.object(inference, "model_for") as model, \
+                patch.object(inference, "ask") as ask:
+            folder, note, issue = cli.scan(self.repo, self.base / "out", self.base / "state")
+        for call in (token, model, ask):
+            call.assert_not_called()
+        self.assertIsNone(issue)
+        self.assertIn("AI 검토 불가", note)
+        self.assertIn("문맥", note)
+        data = json.loads((folder / "scan_result.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(data["findings"]), 1)
+        self.assertFalse(data["findings"][0]["triage_reason"])
+        self.assertIn(note, data["report_md"])
+
+    def test_unextractable_candidates_do_not_consume_review_limit(self):
+        from dataclasses import replace
+        from scanner.models import Confidence, Finding, Location, Severity
+        source = ('BANNER = ' + repr('ordinary description ' * 400)
+                  + '\nAPI_TOKEN = "private-fixture-Pq8Rs2Tu6V"\n' + '\n' * 20
+                  + 'SECOND_KEY = "private-fixture-Xq7Lm2Pz9Wr4"\n')
+        (self.repo / "app.py").write_text(source)
+        self.git("add", "app.py")
+        self.git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                 "-c", "commit.gpgsign=false", "commit", "-qm", "mixed context sizes")
+        base = Finding("F-001", "비밀값", "CWE-798", "", Severity.HIGH, Confidence.POTENTIAL,
+                       Location("app.py", 2), "[가림]", ["static:secret"], "영향", "수정", "diff")
+        findings = [replace(base, id=f"F-{i:03}") for i in range(1, 31)]
+        findings.append(replace(base, id="F-031", location=Location("app.py", len(source.splitlines()))))
+        with patch.object(cli, "inspect", return_value=findings), \
+                patch.object(cli, "access_token", return_value="t") as token, \
+                patch.object(inference, "model_for", return_value="m") as model, \
+                patch.object(inference, "ask", side_effect=lambda token, model, instruction, batch: review_answer(batch)) as ask:
+            folder, note, issue = cli.scan(self.repo, self.base / "out", self.base / "state")
+        self.assertIsNone(issue)
+        token.assert_called_once()
+        model.assert_called_once()
+        ask.assert_called_once()
+        self.assertEqual([item["id"] for item in ask.call_args.args[3]], ["F-031"])
+        data = json.loads((folder / "scan_result.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(data["findings"]), 31)
+        self.assertEqual([f["id"] for f in data["findings"] if f["triage_reason"]], ["F-031"])
+        self.assertIn("1/31", note)
+        self.assertIn("문맥", note)
+        self.assertEqual(data["report_md"], (folder / "report.md").read_text(encoding="utf-8"))
+
+    def test_connection_failures_preserve_local_results_and_history(self):
+        for failure in ("authentication", "model"):
+            with self.subTest(failure=failure), \
+                    patch("scanner.static.semgrep", return_value=[]), \
+                    patch.object(cli, "access_token", return_value="t") as token, \
+                    patch.object(inference, "model_for", return_value="m") as model, \
+                    patch.object(inference, "ask") as ask:
+                if failure == "authentication":
+                    token.side_effect = inference.SessionError("로그인 필요", "login")
+                else:
+                    model.side_effect = ValueError("invalid model response")
+                folder, note, issue = cli.scan(self.repo, self.base / "out", self.base / "state")
+            ask.assert_not_called()
+            self.assertEqual(issue, "login" if failure == "authentication" else "error")
+            data = json.loads((folder / "scan_result.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(data["findings"]), 1)
+            self.assertFalse(data["findings"][0]["triage_reason"])
+            self.assertIn(note, data["report_md"])
+            self.assertEqual(data["report_md"], (folder / "report.md").read_text(encoding="utf-8"))
+        self.assertEqual(len(list_scans(self.base / "state/scan-history.sqlite3", str(self.repo))), 2)
+
+    def test_static_failure_does_not_authenticate_or_call_ai(self):
+        with patch.object(cli, "inspect", side_effect=RuntimeError("analysis failed")), \
+                patch.object(cli, "access_token") as token, \
+                patch.object(inference, "model_for") as model, \
+                patch.object(inference, "ask") as ask:
+            with self.assertRaisesRegex(RuntimeError, "analysis failed"):
+                cli.scan(self.repo, self.base / "out", self.base / "state")
+        for call in (token, model, ask):
+            call.assert_not_called()
+        self.assertFalse((self.base / "out").exists())
+        self.assertFalse((self.base / "state/scan-history.sqlite3").exists())
+
+    def test_review_limit_keeps_unreviewed_findings_and_uses_only_six_batches(self):
+        from dataclasses import replace
+        from scanner.models import Confidence, Finding, Location, Severity
+        base = Finding("F-001", "비밀값", "CWE-798", "", Severity.HIGH, Confidence.POTENTIAL,
+                       Location("app.py", 1), "[가림]", ["static:secret"], "영향", "수정", "diff")
+        findings = [replace(base, id=f"F-{i:03}") for i in range(1, 33)]
+        with patch.object(cli, "inspect", return_value=findings), \
+                patch.object(cli, "access_token", return_value="t"), \
+                patch.object(inference, "model_for", return_value="m"), \
+                patch.object(cli.analysis, "plan", return_value=cli.analysis.default_coverage()) as plan, \
+                patch.object(inference, "ask", side_effect=lambda token, model, instruction, batch: review_answer(batch)) as ask:
+            folder, note, issue = cli.scan(self.repo, self.base / "out", self.base / "state")
+        plan.assert_not_called()
+        self.assertIsNone(issue)
+        self.assertEqual(ask.call_count, 6)
+        self.assertEqual([len(call.args[3]) for call in ask.call_args_list], [5] * 6)
+        reviewed_ids = [item["id"] for call in ask.call_args_list for item in call.args[3]]
+        self.assertEqual(len(set(reviewed_ids)), 30)
+        data = json.loads((folder / "scan_result.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(data["findings"]), 32)
+        self.assertEqual(sum(bool(f["triage_reason"]) for f in data["findings"]), 30)
+        self.assertIn("30/32", note)
+        self.assertIn("30", note)
+        self.assertEqual(data["report_md"], (folder / "report.md").read_text(encoding="utf-8"))
 
     def test_background_review_sends_only_new_high_findings_and_reports_progress(self):
         out, state = self.base / "out", self.base / "state"
@@ -236,7 +458,7 @@ class PipelineTests(unittest.TestCase):
             steps = []
             with patch.object(cli, "access_token", return_value="t"), \
                     patch.object(inference, "model_for", return_value="m"), \
-                    patch.object(cli.analysis, "plan") as plan, \
+                    patch.object(cli.analysis, "plan", return_value=cli.analysis.default_coverage()) as plan, \
                     patch.object(cli.analysis, "review", side_effect=lambda ctx, batch, *a: len(batch)) as review:
                 folder, note, _ = cli.scan(self.repo, out, state, new_high_only=True,
                                            progress=lambda stage, text: steps.append((stage, text)))
@@ -250,6 +472,24 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(sorted({stage for stage, _ in steps}), [0, 1, 2, 3, 4])
         self.assertEqual([stage for stage, _ in steps], sorted(stage for stage, _ in steps))
         self.assertNotIn("private-value", json.dumps(steps, ensure_ascii=False))
+
+    def test_background_scan_without_new_high_findings_skips_ai_connection(self):
+        out, state = self.base / "out", self.base / "state"
+        with patch("scanner.static.semgrep", return_value=[]):
+            cli.scan(self.repo, out, state, offline=True)
+            with patch.object(cli, "access_token") as token, \
+                    patch.object(inference, "model_for") as model, \
+                    patch.object(cli.analysis, "plan", return_value=cli.analysis.default_coverage()) as plan, \
+                    patch.object(inference, "ask") as ask:
+                folder, _, issue = cli.scan(self.repo, out, state, new_high_only=True)
+        for call in (token, model, plan, ask):
+            call.assert_not_called()
+        self.assertIsNone(issue)
+        data = json.loads((folder / "scan_result.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(data["findings"]), 1)
+        self.assertEqual(data["findings"][0]["change"], "existing")
+        self.assertEqual(data["delta"]["new"], 0)
+        self.assertTrue(data["baseline_commit"])
 
     def test_paths_differing_only_in_case_do_not_fail_the_scan(self):
         repo = self.base / "case"

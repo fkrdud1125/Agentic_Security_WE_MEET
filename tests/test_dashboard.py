@@ -56,7 +56,12 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         detail = response.json()
         self.assertEqual(detail["summary"]["High"], 1)
-        self.assertEqual(detail["report_md"], "PRIVATE-REPORT")
+        self.assertTrue(detail["report_md"].startswith("PRIVATE-REPORT"))
+        self.assertEqual(len(detail["criteria"]), 31)
+        self.assertTrue(detail["criteria_legacy"])
+        self.assertIn("OWASP Top 10 2025 · 10개", detail["report_md"])
+        self.assertIn("실행 기록 없음", detail["report_md"])
+        self.assertEqual(json.loads((self.root / "scan-1/scan_result.json").read_text())["report_md"], "PRIVATE-REPORT")
         self.assertIsNone(detail["findings"][0]["change"])
         self.assertEqual(detail["findings"][0]["evidence"], data["findings"][0]["evidence"])
         self.assertEqual(ScanResult.from_json(response.text).scan_id, "scan-1")
@@ -257,7 +262,8 @@ class DashboardTests(unittest.TestCase):
             job = self.wait_scan()
             self.assertEqual(job["state"], "failed")
             self.assertNotIn("PRIVATE", json.dumps(job))
-            engine.assert_called_once_with(repo.resolve(), self.root.resolve(), self.directory.resolve(), offline=False, progress=ANY)
+            engine.assert_called_once_with(repo.resolve(), self.root.resolve(), self.directory.resolve(), offline=False,
+                                           progress=ANY, criteria_progress=ANY)
         self.assertEqual(old.read_bytes(), before)
         with patch("vibescan.dashboard.scan", return_value=(old.parent, "quota reached", "limit")):
             self.assertEqual(self.client.post("/api/scan", headers=self.headers, json={"path": str(repo)}).status_code, 202)
@@ -418,7 +424,9 @@ class DashboardTests(unittest.TestCase):
         self.client.post("/api/repos", headers=self.headers, json={"path": str(repo)})
         release = threading.Event()
 
-        def slow(*args, progress, **kwargs):
+        def slow(*args, progress, criteria_progress, **kwargs):
+            from scanner.criteria import build_criteria
+            criteria_progress(build_criteria(phase="running"))
             progress(0, "파일 1개 수집")
             progress(3, "발견 후보 1건")
             release.wait(5)
@@ -434,9 +442,14 @@ class DashboardTests(unittest.TestCase):
                 job = self.client.get("/api/scan", headers=self.headers).json()
                 self.assertEqual(job["log"], ["파일 1개 수집", "발견 후보 1건"])
                 self.assertEqual(len(job["stages"]), 5)
+                self.assertEqual(len(job["criteria"]), 31)
+                self.assertEqual(next(c for c in job["criteria"] if c["code"] == "SI")["execution"], "running")
             finally:
                 release.set()
             self.assertEqual(self.wait_scan()["log"], ["파일 1개 수집", "발견 후보 1건"])  # kept after it ends
+            final = self.wait_scan()
+            self.assertEqual(next(c for c in final["criteria"] if c["code"] == "SI")["execution"], "failed")
+            self.assertFalse(any(c["execution"] in ("running", "pending") for c in final["criteria"]))
 
         live = self.directory / "live.json"
         state = {"repo": str(repo.resolve()), "commit": "c" * 40, "stage": 2, "log": ["x"], "started": time.time()}

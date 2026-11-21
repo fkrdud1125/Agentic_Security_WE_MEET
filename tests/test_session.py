@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from scanner.models import ScanResult
 from vibescan import cli, inference, session
 from vibescan.login import login_app
-from model_answers import plan_answer, review_answer
+from model_answers import review_answer
 
 
 class SessionTests(unittest.TestCase):
@@ -89,13 +89,11 @@ class SessionTests(unittest.TestCase):
             self.assertEqual(len(payload["input"]), 1)
             self.assertEqual(payload["input"][0]["role"], "user")
             data = json.loads(payload["input"][0]["content"])
-            if isinstance(data, dict):
-                answer = plan_answer(data)
-            else:
-                answer = review_answer(data)
-                for item, review in zip(data, answer["reviews"]):
-                    if "Markup(title)" in (item["snippet"] or {}).get("code", ""):
-                        review["replacement"] = "def render_note(title):\n    from markupsafe import escape\n    return escape(title)\n"
+            self.assertIsInstance(data, list)  # Only finding reviews; no pre-scan planning call.
+            answer = review_answer(data)
+            for item, review in zip(data, answer["reviews"]):
+                if "Markup(title)" in (item["snippet"] or {}).get("code", ""):
+                    review["replacement"] = "def render_note(title):\n    from markupsafe import escape\n    return escape(title)\n"
             result.iter_lines.return_value = [
                 b"data: " + json.dumps({"type": "response.output_text.delta",
                                         "delta": json.dumps(answer)}).encode(),
@@ -106,7 +104,7 @@ class SessionTests(unittest.TestCase):
         with patch.object(inference, "request", side_effect=provider) as remote:
             folder, note, issue = cli.scan(repo, self.directory / "reports", self.directory)
         self.assertIsNone(issue)
-        self.assertEqual(remote.call_count, 3)
+        self.assertEqual(remote.call_count, 2)  # Model lookup + one review batch.
         result = ScanResult.from_json((folder / "scan_result.json").read_text(encoding="utf-8"))
         self.assertIn(f"{len(result.findings)}/{len(result.findings)}", note)
         self.assertEqual(result.profile.framework, "Flask")
