@@ -45,16 +45,21 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn("근거 코드:", json.loads(raw)["report_md"])
 
     def test_model_receives_sanitized_snippets_not_the_local_evidence(self):
+        from test_assessment import answer_for
+        def answer(*args):
+            payload = args[-1]
+            return answer_for(payload) if isinstance(payload, dict) else review_answer(payload)
         with patch("scanner.static.semgrep", return_value=[]), \
                 patch.object(cli, "access_token", return_value="t"), \
                 patch.object(inference, "model_for", return_value="m"), \
-                patch.object(inference, "ask", return_value=review_answer([{"id": "F-001", "severity": "High"}])) as ask:
+                patch.object(inference, "ask", side_effect=answer) as ask:
             cli.scan(self.repo, self.base / "out", self.base / "state")
-        ask.assert_called_once()
+        self.assertGreaterEqual(ask.call_count, 2)
         sent = json.dumps([call.args for call in ask.call_args_list], ensure_ascii=False)
         self.assertNotIn("sk_l", sent)
         self.assertNotIn("# billing client", sent)  # comments are stripped from model context
-        self.assertNotIn('"evidence"', sent)
+        self.assertNotIn('"evidence"', json.dumps(ask.call_args_list[0].args))
+        self.assertNotIn('app.py', sent)  # Both stages send aliases, never source paths.
 
     def test_identifier_words_and_lockfiles_are_not_credentials(self):
         found = lambda name, text: [h.line for h in secrets.detect(name, text) if h.severity.value != "Info"]

@@ -25,8 +25,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from scanner.ingest import git
 from scanner.models import ScanResult
 from scanner.criteria import build_criteria
+from scanner.runtime import validate as validate_verification
 from . import hook
-from .cli import STAGES, ScanInputError, scan, render_criteria
+from .cli import STAGES, ScanInputError, scan, render
 from .login import login
 from .register import data_dir
 from .session import logout, status
@@ -48,6 +49,8 @@ class RepoInput(BaseModel):
 
 class ScanInput(RepoInput):
     offline: bool = Field(default=True, strict=True)
+    dependency_check: bool = Field(default=False, strict=True)
+    verification: dict | None = None
 
 
 class HookInput(RepoInput):
@@ -232,7 +235,7 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
             raise HTTPException(503, "레포 연결을 저장할 수 없습니다.") from None
         return repo
 
-    def run_scan(repo, offline):
+    def run_scan(repo, offline, extra=None):
         nonlocal job
         def failed_criteria():
             rows = []
@@ -255,7 +258,7 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
                 job = {"state": "failed", "repo": repo, "criteria": failed_criteria(), "message": "GitHub에서 최신 커밋을 가져오지 못했습니다. "
                        "네트워크와 저장소 접근 권한을 확인하세요. 기존 결과는 유지됩니다."}
             return
-        options = {}
+        options = dict(extra or {})
         try:
             if Path(repo).is_relative_to(folders):
                 options["folder_source"] = snapshot_folder(Path(repo))
@@ -292,6 +295,10 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
     @app.post("/api/scan", status_code=202)
     def start_scan(body: ScanInput):
         nonlocal job, worker
+        try:
+            validate_verification(body.verification)
+        except (ValueError, TypeError):
+            raise HTTPException(422, 'HTTP 검증 설정이 잘못되었습니다. 설정 예제와 요청 상한을 확인하세요.') from None
         # shortcut: one scan per dashboard process; use a DB lease if multiple servers are supported.
         with lock:
             if job["state"] == "running":
@@ -304,7 +311,12 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
                 raise HTTPException(503, "레포 연결 정보를 읽을 수 없습니다.") from None
             job = {"state": "running", "repo": repo["path"], "offline": body.offline, "stage": 0, "log": [],
                    "criteria": build_criteria(phase="pending")}
-            worker = threading.Thread(target=run_scan, args=(repo["path"], body.offline))
+            extra = {}
+            if body.dependency_check:
+                extra['dependency_check'] = True
+            if body.verification:
+                extra['verification'] = body.verification
+            worker = threading.Thread(target=run_scan, args=(repo["path"], body.offline, extra))
             try:
                 worker.start()
             except RuntimeError:
@@ -434,8 +446,12 @@ def dashboard_app(results: Path, address: str, ticket: str, directory: Path | No
             if legacy_criteria:
                 # Adapt old saved results for display only: no rescan and no overwrite of historical evidence.
                 result.criteria = build_criteria(result.kisa_checklist, result.findings)
-                result.report_md += ("\n\n이전 결과의 저장된 근거로 기준표를 보충했습니다. 기준별 AI 실행 이력이 없어 "
-                                     "상단의 전체 AI 검토 수를 각 기준에 배분하지 않습니다.\n\n" + render_criteria(result.criteria))
+            # Render downloads from the same evidence as the dashboard, including
+            # results saved before the current report format. Never rewrite files.
+            result.report_md = render(result)
+            if legacy_criteria:
+                result.report_md += ("\n이전 결과의 저장된 근거로 기준표를 보충했습니다. 기준별 AI 실행 이력이 없어 "
+                                     "상단의 전체 AI 검토 수를 각 기준에 배분하지 않습니다.\n")
             data = result.to_dict()
             data["criteria_legacy"] = legacy_criteria
             data["scanned_at"] = result.scanned_at.astimezone(timezone.utc).isoformat()

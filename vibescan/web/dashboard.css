@@ -99,6 +99,7 @@ main { width: min(880px,calc(100% - 32px)); margin: auto; padding: 32px 0 60px; 
 .location-detail pre { font-size: 14px; }
 .location-detail details { margin-top: 12px; }
 .task-card textarea { display: block; width: 100%; min-height: 9em; margin-top: 8px; background: var(--code-bg); color: var(--text); }
+#verification-config { display: block; box-sizing: border-box; width: 100%; margin: 8px 0; padding: 10px; resize: vertical; font: 12px/1.6 monospace; color: var(--text); background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--r-sm); }
 .coverage-details { border-top: 1px solid var(--border); padding: 14px 0; margin: 0; }
 #coverage-summary { font-size: 14px; font-weight: 600; }
 #findings { margin-bottom: 20px; }

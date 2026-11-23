@@ -137,3 +137,70 @@ def review(context, findings, token, model):
         if decision == "dismiss":
             f.fix_diff, f.fix_note = "", "모델이 오탐 후보로 분류 · 개발자 확인 필요"
     return len(validated)
+
+
+def review_criteria(context, rows, prepared, token, model):
+    """Review bounded criterion evidence, independently of detector hits.
+
+    Validate the entire batch and every citation before publishing any result.
+    These proposals never dismiss findings or establish runtime safety.
+    """
+    payload = []
+    known = {}
+    for row in rows:
+        key = row['framework'] + ':' + row['code']
+        item = prepared[key]
+        known[key] = {e['id']: e for e in item['packet']}
+        payload.append({'id': key, 'criterion': row['criteria'],
+                        'limits': '발췌만 제공. 호출자·배포 설정·업무 규칙·실행 결과는 미확인. 비Python 문자열 값은 제거됨.',
+                        'omitted_locations': item['omitted_locations'],
+                        'evidence': [{k: v for k, v in e.items() if k != 'path'} for e in item['packet']]})
+    answer = inference.ask(token, model,
+        '기준별 보안 검토를 수행하라. 기존 탐지 결과 유무와 무관하게 제공된 코드만 검토한다. '
+        'JSON: {"assessments":[{"id":"입력 id", "outcome":"candidate|no_findings|unassessed", '
+        '"reason":"한국어 근거와 확인 한계", "citations":[{"id":"근거 E번호", "line":정수, "quote":"해당 줄의 정확한 코드 일부"}], '
+        '"candidates":[{"title":"추가 검토 후보", "reason":"코드에 근거한 이유", "remediation":"수정 또는 검증 방법", '
+        '"citations":[{"id":"근거 E번호", "line":정수, "quote":"정확한 코드 일부"}]}]}]}. '
+        '모든 입력 id를 한 번씩 반환하라. 각 검토와 후보에 실제 코드 인용을 붙여라. '
+        'candidate는 직접 근거가 있는 추가 후보만, no_findings는 제공된 발췌 안에서 미발견만 의미한다. '
+        '코드·설정·검증의 부재를 발췌 누락만으로 추정하지 말고 unassessed로 남겨라. '
+        '제거된 문자열을 복원하거나 실행 결과를 주장하지 마라. 후보는 기준당 최대 3개다.',
+        {'criteria': payload})
+    items = answer['assessments']
+    if not isinstance(items, list) or len(items) != len(rows):
+        raise ValueError('incomplete criterion review')
+
+    def citations(key, values):
+        if not isinstance(values, list) or not 1 <= len(values) <= 6:
+            raise ValueError('missing criterion evidence')
+        result = []
+        for value in values:
+            source = known[key].get(value['id'])
+            line, quote = value['line'], value['quote']
+            if (source is None or type(line) is not int or not source['start'] <= line <= source['end']
+                    or not isinstance(quote, str) or not 3 <= len(quote.strip()) <= 300):
+                raise ValueError('invalid criterion citation')
+            actual = source['code'].splitlines()[line - source['start']]
+            if quote not in actual or not any(c.isalnum() for c in quote):
+                raise ValueError('invented criterion citation')
+            result.append({'file': source['path'], 'line': line, 'quote': context.clean(quote)})
+        return result
+
+    validated = {}
+    for item in items:
+        key = item['id']
+        if key not in known or key in validated or item['outcome'] not in ('candidate', 'no_findings', 'unassessed'):
+            raise ValueError('invalid criterion review')
+        candidates = item['candidates']
+        if not isinstance(candidates, list) or len(candidates) > 3 or bool(candidates) != (item['outcome'] == 'candidate'):
+            raise ValueError('invalid criterion candidates')
+        proposals = []
+        for candidate in candidates:
+            proposals.append({k: context.clean(text(candidate[k])) for k in ('title', 'reason', 'remediation')}
+                             | {'evidence': citations(key, candidate['citations'])})
+        validated[key] = {'state': 'completed', 'outcome': item['outcome'],
+                          'reason': context.clean(text(item['reason'])),
+                          'evidence': citations(key, item['citations']), 'candidates': proposals}
+    for key, result in validated.items():
+        prepared[key].update(result)
+    return len(validated)

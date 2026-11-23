@@ -36,12 +36,13 @@ class CriteriaTests(unittest.TestCase):
         self.assertEqual(rows['kisa', 'SI']['outcome'], 'candidate')
         self.assertEqual(rows['kisa', 'SI']['findings'], ['F-001'])
         self.assertEqual(rows['kisa', 'XS']['outcome'], 'no_findings')
-        self.assertEqual(rows['kisa', 'DI']['execution'], 'manual')
-        self.assertEqual(rows['kisa', 'DI']['outcome'], 'unassessed')
+        self.assertEqual(rows['kisa', 'DI']['execution'], 'partial')
+        self.assertEqual(rows['kisa', 'DI']['outcome'], 'no_findings')
         self.assertEqual(rows['owasp', 'A05:2025']['execution'], 'partial')
         self.assertEqual(rows['owasp', 'A05:2025']['findings'], ['F-001'])
-        self.assertTrue(all(rows['owasp', code]['execution'] == 'manual'
-                            for code in ('A03:2025', 'A09:2025', 'A10:2025')))
+        self.assertEqual(rows['owasp', 'A03:2025']['execution'], 'manual')
+        self.assertTrue(all(rows['owasp', code]['execution'] == 'partial'
+                            for code in ('A09:2025', 'A10:2025')))
 
     def test_unsupported_language_does_not_complete_static_checks(self):
         rows = indexed(build_criteria(checklist([], {'php': 2}, [])))
@@ -96,8 +97,10 @@ class CriteriaTests(unittest.TestCase):
                 rows = indexed(build_criteria(phase=phase))
                 self.assertEqual(rows['kisa', 'SI']['execution'], phase)
                 self.assertEqual(rows['owasp', 'A05:2025']['execution'], phase)
-                self.assertEqual(rows['kisa', 'DI']['execution'], 'manual')
-                self.assertEqual(rows['owasp', 'A09:2025']['execution'], 'manual')
+                self.assertEqual(rows['kisa', 'DI']['execution'], phase)
+                self.assertEqual(rows['kisa', 'PV']['execution'], phase)
+                self.assertEqual(rows['owasp', 'A09:2025']['execution'], phase)
+                self.assertEqual(rows['owasp', 'A03:2025']['execution'], 'manual')
                 self.assertEqual(rows['kisa', 'SI']['outcome'], 'unassessed')
 
     def test_specific_cwe_takes_precedence_over_broad_category_crosswalk(self):

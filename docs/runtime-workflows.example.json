@@ -1,0 +1,34 @@
+{
+  "base_url": "https://test.example.invalid",
+  "allow_mutations": true,
+  "profiles": {"user": {"Authorization": "VIBESCAN_TEST_AUTH"}},
+  "checks": [
+    {
+      "id": "logout-reuse",
+      "criteria": ["IS"],
+      "steps": [
+        {"path": "/api/me", "profile": "user", "expect": {"status": [200], "contains_env": "VIBESCAN_USER_MARKER"}},
+        {"method": "POST", "path": "/api/logout", "profile": "user", "expect": {"status": [200, 204]}},
+        {"path": "/api/me", "profile": "user", "expect": {"status": [401, 403]}}
+      ]
+    },
+    {
+      "id": "reset-token-reuse",
+      "criteria": ["PR"],
+      "steps": [
+        {"method": "POST", "path": "/api/password/reset", "json_env": "VIBESCAN_RESET_BODY", "expect": {"status": [200, 204]}},
+        {"method": "POST", "path": "/api/password/reset", "json_env": "VIBESCAN_RESET_BODY", "expect": {"status": [400, 401, 403, 410]}}
+      ]
+    },
+    {
+      "id": "weak-password-rejected",
+      "criteria": ["BF"],
+      "steps": [{"method": "POST", "path": "/api/password/change", "profile": "user", "json_env": "VIBESCAN_WEAK_PASSWORD_BODY", "expect": {"status": [400, 422]}}]
+    },
+    {
+      "id": "invalid-workflow-rejected",
+      "criteria": ["PV"],
+      "steps": [{"method": "POST", "path": "/api/test-order/complete", "profile": "user", "json_env": "VIBESCAN_INVALID_ORDER_BODY", "expect": {"status": [400, 409, 422]}}]
+    }
+  ]
+}

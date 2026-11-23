@@ -131,6 +131,7 @@ async function main() {
   assert.equal(cover.children[1].querySelectorAll(".criterion-row").length, 21);
   assert.match(criteriaUI.get("criteria-overview-groups").textContent, /10개 기준.*21개 기준/);
   assert.match(criteriaUI.get("criteria-overview-note").textContent, /중복 합산하지 않습니다/);
+  assert.match(criteriaUI.get("criteria-overview-note").textContent, /AI 문맥 검토 기록이 없는 항목 31개/);
   assert.match(cover.textContent, /부분 점검/);
   assert.match(cover.textContent, /수동·동적 확인 필요/);
   assert.match(cover.textContent, /정적 범위 내 미발견/);
@@ -170,6 +171,29 @@ async function main() {
   assert.match(criteriaUI.get("coverage").textContent, /기준별 검사 기록이 없습니다/);
   assert.match(criteriaUI.get("criteria-overview-note").textContent, /완료로 바꾸지 않으며/);
   console.log("31 criteria split, independent statuses, evidence linkage, live progress, legacy gaps and safe text: OK");
+  const criterionAIUI = harness(), assessed = criteriaFixture();
+  assessed[0].assessment = {
+    state: "completed", outcome: "candidate", reason: "코드 발췌 확인 · 운영 설정 미확인",
+    feature: "signals", dynamic: "not_run", matched_locations: 7, omitted_locations: 3, unavailable_files: 2,
+    evidence: [{file:"auth.ts", line:3, quote:"<script>untrusted</script>"}],
+    candidates: [{title:"AI 추가 후보", reason:"역할 확인 필요", remediation:"권한 정책 확인",
+      evidence:[{file:"auth.ts", line:3, quote:"authenticate(user)"}]}],
+  };
+  criterionAIUI.seed({...sample("assessed"), criteria:assessed, analysis_note:"AI 2차 검토 0/0건 · 기준별 AI 검토 1/31개"});
+  assert.match(criterionAIUI.get("verdict-title").textContent, /AI 추가 후보/);
+  assert.match(criterionAIUI.get("analysis-badge").textContent, /1\/31개/);
+  assert.match(criterionAIUI.get("criteria-overview-groups").textContent, /AI 추가 후보가 있는 기준 1개/);
+  const assessedRow = criterionAIUI.get("coverage").querySelectorAll(".criterion-row").find(row => row.dataset.code === assessed[0].code);
+  assessedRow.open = true; assessedRow.handlers.toggle();
+  assert.match(assessedRow.textContent, /미포함 3개/);
+  assert.match(assessedRow.textContent, /실행 검증 미수행/);
+  assert.match(assessedRow.textContent, /<script>untrusted<\/script>/);
+  assert.match(assessedRow.textContent, /auth.ts:3/);
+  assert.match(assessedRow.textContent, /위험 점수에 합산하지 않습니다/);
+  assert.match(assessedRow.textContent, /정적 검사 발견 근거가 없습니다/);
+  await criterionAIUI.get("download").click();
+  assert.equal(await criterionAIUI.downloads[0].text(), "# 보고서");
+  console.log("Criterion AI proposals, citation text, omitted coverage and distinct runtime status: OK");
   const reviewStatus = harness();
   for (const [note, label] of [
     ["로컬 정적 검사 · AI 미사용 (오프라인)", "로컬 검사만"],
@@ -320,6 +344,23 @@ async function main() {
   assert.equal(scan.get("login").hidden, true); assert.equal(scan.get("register-hint").hidden, false); assert.equal(scan.get("account-state").hidden, true);
   assert.equal(scan.get("mode-ai").disabled, true);
   console.log("Explicit offline POST, progress, AI failure recovery, report download and auth gating: OK");
+
+  const extra = harness();
+  extra.run('selectedProject="C:/a"; repoList=[{path:"C:/a",name:"a",hook:false},{path:"C:/b",name:"b",hook:false}];');
+  const verification = {base_url:"https://example.invalid",checks:[{id:"access",criteria:["IA"],steps:[{path:"/private",expect:{status:[403]}}]}]};
+  extra.get("check-dependencies").checked = true;
+  extra.get("verification-config").value = JSON.stringify(verification);
+  extra.respond(() => ({state:"idle"}));
+  await extra.run('startScan("local")');
+  assert.deepEqual(JSON.parse(extra.requests[0].options.body), {path:"C:/a",offline:true,dependency_check:true,verification});
+  const beforeInvalid = extra.requests.length;
+  extra.get("verification-config").value = "{invalid";
+  await extra.run('startScan("local")');
+  assert.equal(extra.requests.length, beforeInvalid);
+  await extra.run('chooseProject("C:/b")');
+  assert.equal(extra.get("check-dependencies").checked, false);
+  assert.equal(extra.get("verification-config").value, "");
+  console.log("External options forwarded, invalid JSON blocked, project-specific settings cleared: OK");
 
   const poll = harness();
   poll.respond(url => url === "/api/scan" ? {state:"idle"} : {scan_id:null});

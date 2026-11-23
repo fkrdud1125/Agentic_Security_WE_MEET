@@ -35,6 +35,10 @@ CWE_CODES = {
     'CWE-256': (('IL',), ('A04:2025',)),
     'CWE-284': (('IN',), ('A01:2025',)),
     'CWE-287': (('IA',), ('A07:2025',)),
+    'CWE-602': (('PV',), ('A06:2025',)),
+    'CWE-636': (('IA',), ('A10:2025',)),
+    'CWE-640': (('PR',), ('A07:2025',)),
+    'CWE-799': (('AU',), ('A06:2025',)),
     'CWE-319': (('SN',), ('A04:2025',)),
     'CWE-321': (('IL', 'IS'), ('A04:2025',)),
     'CWE-326': (('IL',), ('A04:2025',)),
@@ -45,6 +49,9 @@ CWE_CODES = {
     'CWE-434': (('FU',), ('A02:2025',)),
     'CWE-489': (('EP',), ('A02:2025',)),
     'CWE-502': (('CI',), ('A08:2025',)),
+    'CWE-521': (('BF',), ('A07:2025',)),
+    'CWE-548': (('DI',), ('A02:2025',)),
+    'CWE-749': (('WM',), ('A02:2025',)),
     'CWE-532': (('IL',), ('A09:2025',)),
     'CWE-540': (('IL',), ('A02:2025',)),
     'CWE-614': (('CC',), ('A04:2025',)),
@@ -123,7 +130,7 @@ def _execution(item, recorded, phase):
     return EXECUTION.get(recorded.get('coverage_status', recorded.get('status')), 'unknown')
 
 
-def build_criteria(kisa_rows=(), findings=(), *, phase='completed', review_states=None):
+def build_criteria(kisa_rows=(), findings=(), *, phase='completed', review_states=None, assessments=None):
     """Build all 31 rows from engine evidence and explicit per-finding AI state.
 
     ``completed`` describes a completed run, not that every standard was tested.
@@ -147,9 +154,14 @@ def build_criteria(kisa_rows=(), findings=(), *, phase='completed', review_state
         dismissed = [f.id for f in matches if f.status == Status.DISMISSED]
         outcome = ('candidate' if opened else 'no_findings'
                    if execution in ('completed', 'partial') and not dismissed else 'unassessed')
-        return dict(framework=framework, code=code, name=name, execution=execution,
+        result = dict(framework=framework, code=code, name=name, execution=execution,
                     outcome=outcome, findings=opened, dismissed=dismissed, reason=reason,
                     ai=_ai_state(matches, review_states), criteria=criteria, source=source)
+        if assessments is not None:
+            assessment = assessments.get(framework + ':' + code)
+            if assessment is not None:
+                result['assessment'] = assessment
+        return result
 
     for item in items:
         code = item['official_code']
@@ -176,6 +188,10 @@ def build_criteria(kisa_rows=(), findings=(), *, phase='completed', review_state
         code = item['id']
         related = [kisa[key] for key in OWASP_KISA[code]]
         supported = [r for r in related if next(i for i in items if i['official_code'] == r['code'])['detectors']]
+        direct = {'A09:2025': 'V-05', 'A10:2025': 'V-06'}.get(code)
+        if direct:
+            direct_item = next(i for i in book['items'] if i['code'] == direct)
+            supported.append({'execution': _execution(direct_item, recorded.get(direct), phase)})
         if not supported:
             execution = 'manual'
             reason = '이 범주 전체를 평가하는 자동 규칙이 없습니다. 설계·운영 자료 또는 실행 환경의 수동 검토가 필요합니다.'
@@ -186,6 +202,9 @@ def build_criteria(kisa_rows=(), findings=(), *, phase='completed', review_state
         elif any(r['execution'] == 'unknown' for r in supported):
             execution = 'unknown'
             reason = '관련 기준의 실행 기록이 없거나 불완전합니다. 재검사가 필요합니다.'
+        elif all(r['execution'] == 'manual' for r in supported):
+            execution = 'manual'
+            reason = '이번 수집 범위에 지원하는 정적 검사 문맥이 없습니다. 기능·배포 설정의 추가 확인이 필요합니다.'
         else:
             execution = 'partial'
             reason = '관련 정적 규칙만 점검했습니다. OWASP 범주 전체의 점검 완료나 적합 판정을 의미하지 않습니다.'

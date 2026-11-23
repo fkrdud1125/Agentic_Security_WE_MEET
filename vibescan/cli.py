@@ -1,6 +1,7 @@
 """VibeScan manual full-scan and local-login entry points."""
 
 import argparse
+import json
 import os
 import shutil
 import sqlite3
@@ -15,6 +16,9 @@ import requests
 
 from scanner.history import compare, evidence_files, list_scans, save_scan
 from scanner.context import Context
+from scanner.assessment import prepare, public_assessments, select_findings
+from scanner import dependencies, runtime
+from scanner.supplemental import attach
 from scanner.ingest import git, snapshot, languages
 from scanner.kisa import checklist, legacy_coverage
 from scanner.criteria import build_criteria, finding_codes
@@ -27,7 +31,7 @@ from .session import SessionError, access_token
 MANUAL = ["인증·인가 정책 확인", "응답 헤더·쿠키 확인"]
 
 
-def render_criteria(criteria):
+def render_criteria(criteria, findings=()):
     execution = {"pending": "대기", "running": "검사 중", "completed": "정적 범위 완료",
                  "partial": "부분 점검", "manual": "추가 확인 필요", "unknown": "실행 기록 없음", "failed": "검사 중단"}
     outcomes = {"candidate": "취약 후보", "no_findings": "점검 범위 내 미발견", "unassessed": "판정 보류"}
@@ -35,18 +39,31 @@ def render_criteria(criteria):
                  "skipped": "미수행", "failed": "검토 실패", "unknown": "기록 없음", "not_applicable": "검토 대상 없음"}
     def cell(value):
         return str(value).replace("|", "\\|").replace("\n", " ").replace("\r", " ")
+    by_id = {f.id: f for f in findings if f.change != Change.FIXED and f.status != Status.FIXED}
     rows = ["## 기준별 점검 현황", "",
             "OWASP Top 10 2025 10개 + 주통기 웹 21개 = 총 31개 분류 항목입니다. AI 호출 횟수나 개별 검사 횟수가 아닙니다.",
             "같은 발견이 두 기준에 연결될 수 있으므로 항목별 발견 수를 합산하지 않습니다. 기준 간 연결은 프로젝트의 분류이며 공식 일대일 대응표가 아닙니다.",
             "정적 범위 완료·미발견은 적용한 규칙에 한정됩니다. 실행 환경·업무 정책을 포함한 전체 기준의 충족이나 안전을 뜻하지 않습니다.", ""]
+    missing = sum(not c.get('assessment') for c in criteria)
+    if missing:
+        rows.extend([f"기준별 AI 문맥 검토 기록이 없는 항목 {missing}개입니다. 새 검토 결과는 AI를 켜고 다시 스캔해야 생성됩니다.", ""])
     for framework, title in (("owasp", "OWASP Top 10 2025 · 10개"), ("kisa", "주통기 웹 취약점 · 21개")):
         checks = [c for c in criteria if c["framework"] == framework]
-        rows.extend(["### " + title, "", "| 코드 · 항목 | 검사 상태 | 발견 결과 · 근거 ID | AI 검토 | 범위·남은 확인 |",
+        counts = " · ".join(f"{label} {sum(c['execution'] == state for c in checks)}개"
+                            for state, label in execution.items() if any(c['execution'] == state for c in checks))
+        rows.extend(["### " + title, "", counts,
+                     f"기준 문맥 AI 검토 {sum(c.get('assessment', {}).get('state') == 'completed' for c in checks)}/{len(checks)}개 · AI 추가 후보가 있는 기준 {sum(bool(c.get('assessment', {}).get('candidates')) for c in checks)}개",
+                     f"취약 후보가 있는 기준 {sum(bool(c['findings']) for c in checks)}개", "",
+                     "| 코드 · 항목 | 검사 상태 | 발견 결과 · 근거 ID | AI 검토 | 범위·남은 확인 |",
                      "| --- | --- | --- | --- | --- |"])
         for c in checks:
             ai = c["ai"]
             ai_text = (f"기준별 기록 없음 · 연결된 발견 {ai['total']}건" if ai["state"] == "unknown" else
                        f"{ai_states.get(ai['state'], '기록 없음')} {ai['reviewed']}/{ai['total']}건")
+            if c.get('assessment'):
+                assessment = c['assessment']
+                ai_text += ' · 기준 문맥: ' + ai_states.get(assessment['state'], '기록 없음')
+                ai_text += f" · 추가 후보 {len(assessment['candidates'])}건"
             ids = ", ".join(c["findings"]) or "없음"
             if c.get("dismissed"):
                 ids += " / 오탐 후보: " + ", ".join(c["dismissed"])
@@ -56,6 +73,52 @@ def render_criteria(criteria):
                       c["reason"]]
             rows.append("| " + " | ".join(cell(v) for v in values) + " |")
         rows.append("")
+        for c in checks:
+            rows.extend([f"#### {c['code']} · {c['name']}", "",
+                         "- 점검 내용: " + cell(c.get('criteria', '기록 없음')),
+                         "- 범위·남은 확인: " + cell(c['reason']),
+                         "- 기준 출처: " + cell(c.get('source', '기록 없음')), ""])
+            for check in c.get('checks', []):
+                state = {'completed': '설정 범위 완료', 'partial': '부분 수행', 'failed': '실패', 'skipped': '미수행'}.get(check['state'], '기록 없음')
+                rows.extend([f"- {'의존성 DB' if check['kind'] == 'dependencies' else 'HTTP 실행'} 검사 [{cell(check['id'])}]: {state}",
+                             '- 별도 검사 결과: ' + outcomes.get(check['outcome'], '판정 보류'),
+                             '- 검사 범위·사유: ' + cell(check['reason'])])
+                rows.extend('- 근거: ' + cell(e) for e in check['evidence'])
+                rows.extend('- 미검토: ' + cell(e) for e in check.get('omitted', []))
+                rows.append('')
+            if c.get('assessment'):
+                assessment = c['assessment']
+                rows.extend([
+                    '- 기준별 AI 문맥 검토: ' + ai_states.get(assessment['state'], '기록 없음'),
+                    '- AI 결과: ' + outcomes.get(assessment['outcome'], '판정 보류'),
+                    '- AI 근거·한계: ' + cell(assessment['reason']),
+                    f"- 문맥 범위: 관련 위치 {assessment['matched_locations']}개 · 미포함 {assessment['omitted_locations']}개 · 문맥 미지원 파일 {assessment['unavailable_files']}개",
+                    '- 기능 존재: ' + ('관련 코드 단서 있음 · 실제 기능 여부는 미확인' if assessment['feature'] == 'signals' else '미확인'),
+                    '- 실행 검증: 별도 HTTP 검사 결과 참조 · AI 자체는 코드를 실행하지 않음' if any(check['kind'] == 'runtime' and check['state'] != 'skipped' for check in c.get('checks', [])) else '- 실행 검증: 미수행 · AI 미발견은 제공된 발췌에 한정',
+                    '- 추가 후보는 기존 발견 건수·위험 점수에 합산하지 않습니다. 같은 문제가 여러 기준에 나타날 수 있습니다.', ''])
+                for evidence in assessment['evidence']:
+                    rows.append(f"- AI 인용: {cell(evidence['file'])}:{evidence['line']} · {cell(evidence['quote'])}")
+                for candidate in assessment['candidates']:
+                    rows.extend(['', '- AI 추가 검토 후보: ' + cell(candidate['title']),
+                                 '  - 근거: ' + cell(candidate['reason']),
+                                 '  - 수정·확인 방법: ' + cell(candidate['remediation'])])
+                    for evidence in candidate['evidence']:
+                        rows.append(f"  - 인용: {cell(evidence['file'])}:{evidence['line']} · {cell(evidence['quote'])}")
+                rows.append('')
+            ids = list(dict.fromkeys([*c['findings'], *c.get('dismissed', [])]))
+            if not ids:
+                rows.extend(["이 기준에 연결된 정적 검사 발견 근거가 없습니다. AI 추가 후보와 점검 범위는 별도로 확인하세요.", ""])
+            for fid in ids:
+                f = by_id.get(fid)
+                if f is None:
+                    rows.append(f"- {cell(fid)}: 저장된 상세 근거 없음")
+                    continue
+                state = "오탐 후보" if fid in c.get('dismissed', []) else "취약 후보"
+                rows.extend([f"- {cell(fid)} · {cell(f.title)} · {f.severity} · {state}",
+                             f"  - 위치: {cell(f.location.file or f.location.endpoint or '기록 없음')}:{f.location.line or '-'}",
+                             "  - 판정 근거: " + cell(f.triage_reason or '로컬 규칙 탐지 · 모델 검토 없음'),
+                             "  - 수정 방법: " + cell(f.remediation_ko or '개별 발견의 수정 예시와 코드 문맥을 확인하세요.')])
+            rows.append("")
     rows.extend(["출처: [OWASP Top 10 2025](https://top10.owasp.org/2025/) · OWASP Top 10 Team, CC BY 3.0, 한국어명은 프로젝트 번역.",
                  "주통기 목록: 사용자 제공 2026 주요정보통신기반시설 상세가이드, 웹 애플리케이션 장의 21항목. 판단 설명과 자동 검사 범위는 프로젝트의 요약입니다.", ""])
     return "\n".join(rows)
@@ -65,6 +128,7 @@ def render(result):
     fixed = [f for f in result.findings if f.change == Change.FIXED]
     opened = [f for f in result.findings if f.status == Status.OPEN and f.change != Change.FIXED]
     dismissed = [f for f in result.findings if f.status == Status.DISMISSED and f.change != Change.FIXED]
+    external_candidates = {check['id'] for c in result.criteria for check in c.get('checks', []) if check['outcome'] == 'candidate'}
     rows = [f"# 보안 진단 보고서 — {result.app_name}", "",
             f"- 커밋: `{result.commit}`", f"- 진단 일시: {result.scanned_at.isoformat()}",
             f"- 위험 점수: {result.risk_score}/100 · 검토 대상 {len(opened)}건 · 오탐 후보 {len(dismissed)}건",
@@ -72,12 +136,14 @@ def render(result):
             f"- 앱 프로파일: {result.profile.framework or '프레임워크 미확인'} · "
             f"라우트 데코레이터 {result.profile.routes}개 · {result.profile.auth or '인증 방식 미확인'}",
             f"- AI 2차 검토: {result.analysis_note}",
+            f"- AI 추가 후보가 있는 기준: {sum(bool(c.get('assessment', {}).get('candidates')) for c in result.criteria)}개 · 위험 점수 미포함 · 기준 간 중복 가능",
+            f"- 외부 검사 추가 확인 대상: {len(external_candidates)}개 검사 · 위험 점수 미포함 · 기준별 상세 참조",
             f"- 직전 스캔 대비: 새로 생김 {sum(f.change == Change.NEW for f in result.findings)}건 · 해결 {len(fixed)}건 "
             f"(기준 커밋 `{result.baseline_commit}`)" if result.baseline_commit else "- 직전 스캔 대비: 비교할 이전 결과 없음", "",
             "## 코드 구조 분석", result.profile.analysis_ko or "로컬 구조 분석만 수행했습니다."]
     rows.extend(f"- {p['file']}:{p['line']} · {p['kind']}: {p['note']}" for p in result.profile.surfaces)
     rows.extend("- " + s for s in result.profile.limitations)
-    rows.extend(["", render_criteria(result.criteria or build_criteria(result.kisa_checklist, result.findings)),
+    rows.extend(["", render_criteria(result.criteria or build_criteria(result.kisa_checklist, result.findings), result.findings),
                  "", "## 검사 엔진별 범위 (참고)"])
     for check in result.coverage:
         mode = {"completed": "정적 검사 완료", "unsupported": "지원 Python 소스 없음 · 미검사",
@@ -153,20 +219,27 @@ STAGES = ["코드 수집", "구조 분석", "정적 검사", "AI 2차 검토", "
 
 
 def scan(repo, output, directory, offline=False, trigger=Trigger.MANUAL, progress=lambda stage, text: None,
-         new_high_only=False, folder_source=None, criteria_progress=lambda rows: None):
+         new_high_only=False, folder_source=None, criteria_progress=lambda rows: None,
+         dependency_check=False, verification=None):
     """progress(stage, text) reports STAGES[stage] and one log line; text never carries source code.
 
     Static inspection always precedes optional AI review; no model planning call is made.
     new_high_only (background scans with consent): review only findings that are
     new since the previous scan and High or above, to spare the user's ChatGPT quota.
     """
+    try:
+        runtime.validate(verification)
+    except (ValueError, TypeError):
+        raise ScanInputError('HTTP 검증 설정 형식이 잘못되었습니다. 설정 예제를 확인하세요.') from None
+    if new_high_only and (dependency_check or verification):
+        raise ScanInputError('자동 스캔에서는 외부 DB·HTTP 검증을 실행하지 않습니다.')
     repo = repo.expanduser().resolve()
     output = output.expanduser().resolve()
     if output.is_relative_to(repo) or directory.resolve().is_relative_to(repo):
         raise ScanInputError("결과와 이력은 검사 대상 저장소 밖에 저장해야 합니다.")
     scan_id = uuid.uuid4().hex
     coverage = analysis.default_coverage()
-    note = "로컬 정적 검사 · AI 미사용 (오프라인)"
+    note = "로컬 정적 검사 · AI 미사용" + (" · 선택한 외부 검사 별도 수행" if dependency_check or verification else " (오프라인)")
     issue = None  # first model problem, so the dashboard can point to its fix
     active = None
     review_states = {}
@@ -188,8 +261,9 @@ def scan(repo, output, directory, offline=False, trigger=Trigger.MANUAL, progres
         context = Context(source, files)
         app.limitations = ["언어별로 지원하는 정적 규칙을 적용합니다. 실행 중 동작은 수동 확인 대상입니다."]
         app.limitations.extend([
-            "AI 2차 검토는 정적 검사에서 발견한 후보와 관련 코드를 검토합니다. 미탐 여부나 실제 악용 가능성을 보증하지 않습니다.",
-            "AI 검토는 마스킹 후 문맥을 추출할 수 있는 Python 발견사항만 지원하며, 심각도순 최대 30건을 5건씩 검토합니다.",
+            "AI는 기존 발견 검토와 기준별 코드 검토를 분리합니다. 추가 후보는 실행 검증 전 제안이며 위험 점수와 기존 발견 건수에 합산하지 않습니다.",
+            "기존 발견은 Python 문맥 최대 30건을 기준별로 배분합니다. 수동 AI 스캔은 Python·JS/TS·Java의 전송 가능한 문맥으로 31개 기준을 검토합니다.",
+            "AI 문맥은 최대 4개 발췌·전체 60000자로 제한합니다. 호출 관계 전체는 미확인입니다. OSV·HTTP 검증은 별도 선택한 범위만 수행하며 독립된 결과로 표시합니다.",
         ])
         counts = languages(files)
         if counts.get("java"):
@@ -202,6 +276,11 @@ def scan(repo, output, directory, offline=False, trigger=Trigger.MANUAL, progres
         progress(2, "정적 규칙·시크릿·설정 검사 중")
         criteria_progress(build_criteria(phase="running"))
         findings = inspect(source, files)
+        progress(2, '의존성 목록 확인' + (' · OSV 조회 중' if dependency_check else ' · 외부 조회 미선택'))
+        supplemental = [dependencies.check(source, files, enabled=dependency_check)]
+        if verification:
+            progress(2, '설정된 HTTP 검증 시나리오 실행 중')
+            supplemental.extend(runtime.run(verification))
         if any('policy_source' in route for route in getattr(findings, 'routes', [])):
             app.framework = ', '.join(filter(None, [app.framework, 'Spring MVC']))
         progress(2, f"발견 후보 {len(findings)}건")
@@ -215,21 +294,29 @@ def scan(repo, output, directory, offline=False, trigger=Trigger.MANUAL, progres
                    (f.change == Change.NEW and f.severity in (Severity.CRITICAL, Severity.HIGH))]
         reviewable = [f for f in targets
                       if context.excerpt(f.location.file, f.location.line) is not None]
+        selected = select_findings(reviewable)
+        criterion_rows = build_criteria(checklist(findings, counts, partial), findings)
+        assessments = prepare(context, source, files, criterion_rows)
+        if offline or new_high_only:
+            for assessment in assessments.values():
+                assessment.update(state='skipped', reason='로컬 검사 모드' if offline else '자동 스캔은 새 High 이상 발견만 검토합니다.')
+        criterion_targets = [row for row in criterion_rows
+                             if assessments[row['framework'] + ':' + row['code']]['state'] == 'pending']
         review_states = {f.id: "skipped" for f in findings}
         if not offline:
-            review_states.update({f.id: "pending" for f in reviewable[:30]})
+            review_states.update({f.id: "pending" for f in selected})
         def publish_criteria():
             # Carry-over IDs are renumbered at save time; don't mix them with this run's IDs here.
-            criteria_progress(build_criteria(checklist(findings, counts, partial), findings,
-                                             review_states=review_states))
+            criteria_progress(attach(build_criteria(checklist(findings, counts, partial), findings,
+                                             review_states=review_states, assessments=public_assessments(assessments)), supplemental))
         publish_criteria()
         count = 0
         if not offline:
-            if not targets:
+            if not targets and not criterion_targets:
                 note = "로컬 정적 검사 · AI 검토 생략 (검토 대상 없음)"
                 if new_high_only:
                     note += " · 새 High 이상만 검토"
-            elif not reviewable:
+            elif not reviewable and not criterion_targets:
                 note = "로컬 정적 검사 · AI 검토 불가 (지원하는 Python 코드 문맥 없음)"
             else:
                 progress(3, "정적 검사 완료 · AI 2차 검토 연결 중")
@@ -242,8 +329,8 @@ def scan(repo, output, directory, offline=False, trigger=Trigger.MANUAL, progres
                 except (OSError, ValueError, KeyError, TypeError, sqlite3.Error, requests.RequestException):
                     note, issue = "로컬 정적 검사 · AI 연결 실패 · 정적 결과 유지", "error"
         if active:
-            for start in range(0, min(len(reviewable), 30), 5):
-                batch = reviewable[start:start + 5]
+            for start in range(0, len(selected), 5):
+                batch = selected[start:start + 5]
                 review_states.update({f.id: "running" for f in batch})
                 publish_criteria()
                 progress(3, f"AI 2차 검토 중 {count}/{len(targets)}건")
@@ -266,6 +353,29 @@ def scan(repo, output, directory, offline=False, trigger=Trigger.MANUAL, progres
                 note += " · 모델용 소스 문맥이 없는 항목은 로컬 판정 유지"
             if len(reviewable) > 30:
                 note += " · 모델 검토 상한 30건, 나머지는 로컬 규칙 결과"
+            reviewed_criteria = 0
+            if not issue:
+                for start in range(0, len(criterion_targets), 3):
+                    batch = criterion_targets[start:start + 3]
+                    keys = [row['framework'] + ':' + row['code'] for row in batch]
+                    for key in keys:
+                        assessments[key]['state'] = 'running'
+                    publish_criteria()
+                    progress(3, f"AI 기준별 문맥 검토 {reviewed_criteria}/{len(criterion_targets)}개")
+                    try:
+                        reviewed_criteria += analysis.review_criteria(context, batch, assessments, *active)
+                    except (SessionError, ValueError, KeyError, TypeError, IndexError, requests.RequestException) as exc:
+                        issue = exc.kind if isinstance(exc, SessionError) else 'error'
+                        for key in keys:
+                            assessments[key].update(state='failed', reason='AI 응답 또는 인용 근거 검증 실패 · 판정 보류')
+                        break
+                    publish_criteria()
+            note += f" · 기준별 AI 검토 {reviewed_criteria}/31개 (관련 문맥 {len(criterion_targets)}개)"
+        for assessment in assessments.values():
+            if assessment['state'] in ('pending', 'running'):
+                assessment.update(state='skipped', reason='AI 연결·검토 중단으로 미수행 · 판정 보류')
+        if issue and criterion_targets:
+            note += ' · 기준별 AI 미완료 항목은 판정 보류'
         review_states = {fid: ("failed" if issue else "skipped") if state in ("pending", "running") else state
                          for fid, state in review_states.items()}
         publish_criteria()
@@ -282,16 +392,18 @@ def scan(repo, output, directory, offline=False, trigger=Trigger.MANUAL, progres
     kisa_rows = checklist(findings, languages(files), partial, carried=kept)
     coverage = legacy_coverage(coverage, kisa_rows)
     app.routes = len(getattr(findings, 'routes', [])) or app.routes
-    result = ScanResult(scan_id, repo.name, datetime.now(timezone.utc), Target(str(repo)),
+    result = ScanResult(scan_id, repo.name, datetime.now(timezone.utc), Target(str(repo), verification['base_url'] if verification else None),
                         min(100, sum(weights[f.severity] for f in current if f.status == Status.OPEN)), app, current + gone, "",
                         branch=branch, commit=commit, baseline_commit=previous.commit if matched else None, trigger=trigger,
                         checklist=[c['name'] for c in coverage],
                         analysis_note=note, coverage=coverage,
-                        engine={'version': '0.2.0', 'rulepack': 'vibescan-2026.11.4', 'semgrep': '1.185.0'},
+                        engine={'version': '0.2.0', 'rulepack': 'vibescan-2026.11.6', 'semgrep': '1.185.0',
+                                'criterion_review': '1'},
                         languages=languages(files), partial_files=partial,
                         sensitive_files=getattr(files, 'sensitive_files', []), routes=getattr(findings, 'routes', []),
                         config_summary=getattr(findings, 'config_summary', []), kisa_checklist=kisa_rows,
-                        criteria=build_criteria(kisa_rows, current + gone, review_states=review_states))
+                        criteria=attach(build_criteria(kisa_rows, current + gone, review_states=review_states,
+                                                assessments=public_assessments(assessments)), supplemental))
     criteria_progress(result.criteria)
     result.report_md = render(result)
     output.mkdir(parents=True, exist_ok=True)
@@ -325,6 +437,9 @@ def main():
     run.add_argument("repo", type=Path)
     run.add_argument("--offline", action="store_true", help="로컬 규칙만 사용")
     run.add_argument("--output", type=Path, help="실행별 결과 폴더의 상위 경로")
+    run.add_argument('--dependencies', action='store_true', help='고정 패키지 이름·버전을 OSV에 전송하여 취약점 조회')
+    run.add_argument('--no-ai', action='store_true', help='AI만 생략 (선택한 OSV·HTTP 검사는 실행)')
+    run.add_argument('--verification-config', type=Path, help='명시적으로 실행할 HTTP 검증 JSON 설정 파일')
     hook = commands.add_parser("hook-trigger", help="git post-commit hook이 호출하는 백그라운드 검사")
     hook.add_argument("commit")
     args = parser.parse_args()
@@ -340,7 +455,16 @@ def main():
             from .login import login
             print(login(directory))
         else:
-            folder, note, _ = scan(args.repo, args.output or directory / "scans", directory, args.offline)
+            verification = None
+            if args.offline and (args.dependencies or args.verification_config):
+                raise ScanInputError('--offline은 외부 검사와 함께 사용할 수 없습니다. AI만 생략하려면 --no-ai를 사용하세요.')
+            if args.verification_config:
+                raw = args.verification_config.read_bytes()
+                if len(raw) > 65536:
+                    raise ScanInputError('HTTP 검증 설정은 64KB 이하여야 합니다.')
+                verification = json.loads(raw.decode('utf-8-sig'))
+            folder, note, _ = scan(args.repo, args.output or directory / "scans", directory, args.offline or args.no_ai,
+                                   dependency_check=args.dependencies, verification=verification)
             print(f"{folder}\n{note}")
     except (ValueError, RuntimeError, OSError, sqlite3.Error, subprocess.TimeoutExpired) as exc:
         parser.exit(1, f"VibeScan: {exc}\n")

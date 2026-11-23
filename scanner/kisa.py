@@ -37,6 +37,9 @@ def checklist(findings, languages, partial_files, carried=()):
             if 'routes' in detectors or detectors == ['config']:
                 state = '부분 점검'
                 note = '지원하는 프레임워크의 정적 단서만 확인. 상위 미들웨어·배포 설정은 미확인.'
+            if 'policy' in detectors:
+                state = '부분 점검'
+                note = 'Python/Django/Flask 또는 서버 설정의 명시적 위험 패턴만 확인합니다. 기능 존재·실제 적용·실행 동작은 미확인입니다.'
             if item['code'] == 'CI-14' and 'python' not in code_languages:
                 state = '부분 점검'; note = '업로드 규칙은 현재 Flask만 지원합니다.'
             elif (item['code'] == 'CI-14' and code_languages == {'python'} and not unsupported
@@ -53,6 +56,9 @@ def checklist(findings, languages, partial_files, carried=()):
                 elif set(detectors) != {'secrets'}:
                     state = '부분 점검'
                     note += ' 이 항목의 Java 전용 규칙은 없습니다.'
+            if 'policy' in detectors and hasattr(findings, 'policy_files') and not findings.policy_files.get(item['code']):
+                state = '수동 확인 필요'
+                note = '이번 수집 범위에 이 규칙이 지원하는 Python 또는 서버 설정 문맥이 없습니다. 실제 기능·설정 부재로 판정하지 않습니다.'
         coverage_status = state
         if matches:
             state = '취약 후보'

@@ -4,7 +4,7 @@ import ast
 import re
 
 from .models import AppProfile
-from .detectors import secrets, config, routes, java
+from .detectors import secrets, config, routes, java, policy
 from .detectors.semgrep import convert, semgrep
 from .normalize import RawHit, normalize, code_identity
 
@@ -90,6 +90,7 @@ def inspect(directory, files):
     for name, content in contents.items():
         hidden[name] = set()
         raw.extend(secrets.detect(name, content, hidden[name]))
+        raw.extend(policy.detect(name, content))
         found, summary = config.detect(name, content)
         raw.extend(found); settings.extend(summary)
         found, rows = routes.detect(name, content)
@@ -115,6 +116,14 @@ def inspect(directory, files):
                     for h in raw if h.detector == 'semgrep' and h.rule_id in
                     {'vs-js-cors', 'vs-js-cookie', 'vs-js-error'})
     result = Inspection(normalize(raw), partial, route_rows, settings)
+    result.policy_files = {
+        'CI-03': [name for name in contents if name.endswith('.conf')],
+        'CI-21': [name for name in contents if name.endswith('.conf')],
+        'CI-07': [name for name in contents if name.endswith('.py') and name not in partial],
+        'CI-09': [name for name in contents if name.endswith('.py') and name not in partial],
+    }
+    for code in ('CI-10', 'CI-12', 'CI-13', 'CI-17', 'CI-20', 'V-05', 'V-06'):
+        result.policy_files[code] = result.policy_files['CI-07']
     result.credential_files = credential_files
     result.file_upload = any('request.files' in text or 'UploadFile' in text or 'multer' in text
                              for text in contents.values())

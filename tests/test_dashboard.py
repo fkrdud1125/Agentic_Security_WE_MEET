@@ -56,16 +56,44 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         detail = response.json()
         self.assertEqual(detail["summary"]["High"], 1)
-        self.assertTrue(detail["report_md"].startswith("PRIVATE-REPORT"))
+        self.assertTrue(detail["report_md"].startswith("# 보안 진단 보고서"))
         self.assertEqual(len(detail["criteria"]), 31)
         self.assertTrue(detail["criteria_legacy"])
         self.assertIn("OWASP Top 10 2025 · 10개", detail["report_md"])
         self.assertIn("실행 기록 없음", detail["report_md"])
+        self.assertIn("기준별 AI 문맥 검토 기록이 없는 항목 31개", detail["report_md"])
         self.assertEqual(json.loads((self.root / "scan-1/scan_result.json").read_text())["report_md"], "PRIVATE-REPORT")
         self.assertIsNone(detail["findings"][0]["change"])
         self.assertEqual(detail["findings"][0]["evidence"], data["findings"][0]["evidence"])
         self.assertEqual(ScanResult.from_json(response.text).scan_id, "scan-1")
         self.assertEqual(list(self.root.rglob("*.sqlite3")), [])
+
+    def test_download_refreshes_stale_report_from_saved_criteria_without_writing(self):
+        from scanner.criteria import build_criteria
+        from scanner.kisa import checklist
+        result = ScanResult.from_json(json.dumps(sample()))
+        result.criteria = build_criteria(checklist(result.findings, {'python': 1}, []),
+                                         result.findings, review_states={'F-001': 'completed'})
+        result.findings[0].remediation_ko = '매개변수 바인딩 사용'
+        self.save(result.to_dict())
+        path = self.root / 'scan-1/scan_result.json'
+        original = path.read_bytes()
+        for _ in range(2):
+            detail = self.client.get('/api/scans/scan-1', headers=self.headers).json()
+            report = detail['report_md']
+            self.assertFalse(detail['criteria_legacy'])
+            self.assertEqual(detail['criteria'], result.criteria)
+            self.assertNotIn('PRIVATE-REPORT', report)
+            self.assertEqual(report.count('## 기준별 점검 현황'), 1)
+            for criterion in result.criteria:
+                self.assertIn(f"| {criterion['code']} · {criterion['name']} |", report)
+                self.assertIn(f"#### {criterion['code']} · {criterion['name']}", report)
+                self.assertIn(criterion['criteria'], report)
+                self.assertIn(criterion['source'], report)
+            self.assertIn('검토 완료 1/1건', report)
+            self.assertIn('위치: app.py:12', report)
+            self.assertIn('수정 방법: 매개변수 바인딩 사용', report)
+            self.assertEqual(path.read_bytes(), original)
 
     def test_local_access_boundary_and_asset_allowlist(self):
         self.save(sample())
@@ -204,6 +232,27 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(self.client.post("/api/scan", headers=self.headers, json=body | {"offline": "false"}).status_code, 422)
             self.assertEqual(self.client.post("/api/repos", headers=self.headers, json=body | {"command": "anything"}).status_code, 422)
             engine.assert_not_called()
+
+    def test_external_check_options_are_validated_and_forwarded(self):
+        repo = self.repository()
+        self.client.post("/api/repos", headers=self.headers, json={"path": str(repo)})
+        old = self.save(sample())
+        config = {"base_url": "https://example.invalid", "checks": [
+            {"id": "access", "criteria": ["IA"], "steps": [
+                {"method": "GET", "path": "/private", "expect": {"status": [401, 403]}}
+            ]}
+        ]}
+        with patch("vibescan.dashboard.scan", return_value=(old.parent, "done", None)) as engine:
+            body = {"path": str(repo), "dependency_check": True, "verification": config}
+            invalid = body | {"verification": config | {"base_url": "file:///tmp"}}
+            self.assertEqual(self.client.post("/api/scan", headers=self.headers, json=invalid).status_code, 422)
+            engine.assert_not_called()
+            response = self.client.post("/api/scan", headers=self.headers, json=body)
+            self.assertEqual(response.status_code, 202, response.text)
+            self.assertEqual(self.wait_scan()["state"], "completed")
+            engine.assert_called_once_with(repo.resolve(), self.root.resolve(), self.directory.resolve(),
+                                           offline=True, progress=ANY, criteria_progress=ANY,
+                                           dependency_check=True, verification=config)
 
     def test_real_scans_compare_with_the_previous_scan_without_model_by_default(self):
         repo = self.repository()

@@ -12,7 +12,7 @@ from pathspec import GitIgnoreSpec
 EXCLUDED = {".git", ".venv", "venv", "node_modules", "vendor", "dist", "build", "__pycache__"}
 EXTENSIONS = {".py", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".html", ".toml",
               ".json", ".yaml", ".yml", ".ini", ".cfg", ".properties", ".txt",
-              ".vue", ".svelte", ".astro", ".php", ".rb", ".go", ".java", ".kt", ".sql", ".rules", ".conf", ".jinja", ".j2"}
+              ".vue", ".svelte", ".astro", ".php", ".rb", ".go", ".java", ".kt", ".sql", ".rules", ".conf", ".jinja", ".j2", ".lock", ".xml"}
 MAX_FILE = 1024 * 1024
 MAX_TOTAL = 64 * MAX_FILE
 

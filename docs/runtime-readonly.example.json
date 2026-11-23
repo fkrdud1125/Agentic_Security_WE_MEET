@@ -1,0 +1,32 @@
+{
+  "base_url": "https://test.example.invalid",
+  "profiles": {
+    "owner": {"Authorization": "VIBESCAN_OWNER_AUTH"},
+    "other": {"Authorization": "VIBESCAN_OTHER_AUTH"}
+  },
+  "checks": [
+    {
+      "id": "admin-anonymous",
+      "criteria": ["IA", "AE"],
+      "steps": [{"path": "/api/admin", "expect": {"status": [401, 403]}}]
+    },
+    {
+      "id": "resource-ownership",
+      "criteria": ["IN"],
+      "steps": [
+        {"path": "/api/orders/test-order", "profile": "owner", "expect": {"status": [200], "contains_env": "VIBESCAN_ORDER_MARKER"}},
+        {"path": "/api/orders/test-order", "profile": "other", "expect": {"status": [403, 404], "absent_env": "VIBESCAN_ORDER_MARKER"}}
+      ]
+    },
+    {
+      "id": "directory-listing",
+      "criteria": ["DI"],
+      "steps": [{"path": "/uploads/", "expect": {"status": [403, 404]}}]
+    },
+    {
+      "id": "error-page",
+      "criteria": ["EP", "IL"],
+      "steps": [{"path": "/vibescan-nonexistent-test-path", "expect": {"status": [404], "absent_env": "VIBESCAN_INTERNAL_ERROR_MARKER"}}]
+    }
+  ]
+}

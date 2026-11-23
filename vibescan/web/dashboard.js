@@ -143,7 +143,7 @@ async function chooseProject(path, preferred = null) {
   selectedProject = path;
   remember("localStorage", "vibescan-project", path);
   ++detailVersion;
-  if (changed) { closeDrawer(); result = null; resetFilters(); }
+  if (changed) { closeDrawer(); result = null; resetFilters(); $("verification-config").value = ""; $("check-dependencies").checked = false; }
   renderProjects(); renderHistory(preferred); busy(scanning);
   if ($("scan-select").value) await selectScan();
   else { result = null; emptyState(); }
@@ -180,6 +180,7 @@ async function refresh(preferred = null) {
     const items = projects();
     if (!items.some(p => p.path === selectedProject)) {
       selectedProject = items[0]?.path || "";
+      $("verification-config").value = ""; $("check-dependencies").checked = false;
       remember("localStorage", "vibescan-project", selectedProject);
       result = null; resetFilters();
     }
@@ -360,18 +361,49 @@ function criterionRow(row, findings, live) {
   const outcome = ids.length ? `취약 후보 ${ids.length}건` : row.outcome === "no_findings" ? "정적 범위 내 미발견" : "판정 보류";
   const verdict = node("span", outcome + (dismissed.length ? ` · 오탐 후보 ${dismissed.length}건` : ""), "criterion-outcome" + (ids.length ? " candidate" : ""));
   summary.append(title, state, verdict, node("span", criterionAiText(row), "criterion-ai"));
+  if (row.assessment) {
+    const a = row.assessment;
+    summary.append(node("span", `기준 문맥 AI ${criterionAI[a.state] || "기록 없음"} · 추가 후보 ${(a.candidates || []).length}건`, "criterion-ai"));
+  }
+  if (row.checks?.length) {
+    const count = row.checks.filter(c => c.outcome === "candidate").length;
+    const completed = row.checks.filter(c => c.state === "completed").length;
+    summary.append(node("span", `외부 검사 완료 ${completed}/${row.checks.length} · 추가 확인 ${count}개`, "criterion-ai"));
+  }
   detail.append(summary, node("p", row.reason || "저장된 점검 근거가 없습니다.", "criterion-reason"));
   detail.addEventListener("toggle", () => {
     if (!detail.open || detail.dataset.loaded) return;
     detail.dataset.loaded = "true";
     if (row.criteria) detail.append(node("p", "점검 내용: " + row.criteria));
     if (row.source) detail.append(node("p", "기준 출처: " + row.source, "criteria-help"));
+    for (const check of row.checks || []) {
+      const states = {completed: "설정 범위 완료", partial: "부분 수행", failed: "실패", skipped: "미수행"};
+      detail.append(node("h4", `${check.kind === "dependencies" ? "의존성 DB" : "HTTP 실행"} 검사 · ${check.id}`),
+        node("p", `${states[check.state] || "기록 없음"} · ${check.outcome === "candidate" ? "추가 확인 대상" : check.outcome === "no_findings" ? "설정 범위 내 미발견" : "판정 보류"}`),
+        node("p", check.reason));
+      for (const evidence of check.evidence || []) detail.append(node("p", evidence));
+      for (const omitted of check.omitted || []) detail.append(node("p", "미검토: " + omitted));
+    }
+    if (row.assessment) {
+      const a = row.assessment;
+      const outcome = {candidate: "추가 검토 후보", no_findings: "제공된 발췌 내 미발견", unassessed: "판정 보류"};
+      detail.append(node("h4", "기준별 AI 문맥 검토"),
+        node("p", `${outcome[a.outcome] || "판정 보류"} · ${a.reason}`),
+        node("p", `관련 위치 ${a.matched_locations}개 · 미포함 ${a.omitted_locations}개 · 문맥 미지원 파일 ${a.unavailable_files}개`),
+        node("p", `기능 존재: ${a.feature === "signals" ? "관련 코드 단서 있음 · 실제 기능 미확인" : "미확인"} · ${(row.checks || []).some(c => c.kind === "runtime" && c.state !== "skipped") ? "실행 검증은 별도 HTTP 검사 결과 참조" : "실행 검증 미수행"}`),
+        node("p", "AI 추가 후보는 기존 발견 건수·위험 점수에 합산하지 않습니다. 같은 문제가 여러 기준에 나타날 수 있습니다.", "criteria-help"));
+      for (const e of a.evidence || []) detail.append(node("p", `${e.file}:${e.line} · ${e.quote}`));
+      for (const candidate of a.candidates || []) {
+        detail.append(node("h4", candidate.title), node("p", candidate.reason), node("p", "수정·확인 방법: " + candidate.remediation));
+        for (const e of candidate.evidence || []) detail.append(node("p", `${e.file}:${e.line} · ${e.quote}`));
+      }
+    }
     if (live) {
       detail.append(node("p", live === "failed" ? "이 스캔은 중단되었습니다. 아래의 기존 결과와 별개이며, 저장하지 못한 근거는 표시하지 않습니다." : "실행 중인 상태입니다. 근거와 수정 방법은 결과 저장 후 확인할 수 있습니다."));
       return;
     }
     const related = findings.filter(f => [...ids, ...dismissed].includes(f.id) && findingStatus(f) !== "fixed");
-    if (!related.length) detail.append(node("p", "이 기준에 연결된 발견 근거가 없습니다. 점검 범위와 추가 확인 사유를 확인하세요."));
+    if (!related.length) detail.append(node("p", "이 기준에 연결된 정적 검사 발견 근거가 없습니다. AI 추가 후보와 점검 범위는 별도로 확인하세요."));
     for (const f of related) {
       detail.append(node("h4", `${f.id} · ${f.title}`), locationDetail(f));
     }
@@ -398,11 +430,15 @@ function renderCoverage() {
     card.append(node("h3", title), node("strong", `${expected}개 기준`, "criteria-total"),
       node("p", items.length ? criterionCounts(items) : "검사 기록 없음"),
       node("p", `취약 후보가 있는 기준 ${items.filter(row => (row.findings || []).length).length}개`, "criteria-help"));
+    if (items.some(row => row.assessment)) card.append(node("p",
+      `기준 문맥 AI 검토 ${items.filter(row => row.assessment?.state === "completed").length}/${expected}개 · AI 추가 후보가 있는 기준 ${items.filter(row => row.assessment?.candidates?.length).length}개`, "criteria-help"));
     return card;
   }));
   $("criteria-overview-note").textContent = rows.length ? "31개는 두 기준표의 분류 항목 수입니다. 같은 발견이 두 기준에 연결될 수 있으며, 발견 건수는 중복 합산하지 않습니다."
     : "이전 결과에는 항목별 상태가 저장되지 않았습니다. 기존 결과를 검사 완료로 바꾸지 않으며, 새 스캔에서 31개 기준의 상태를 기록합니다.";
   if (result.criteria_legacy) $("criteria-overview-note").textContent += " 이전 결과의 저장된 근거로 기준표를 보충했습니다. 기준별 AI 실행 기록이 없어 전체 AI 검토 수를 각 항목에 배분하지 않습니다.";
+  const missingAssessments = rows.filter(row => !row.assessment).length;
+  if (missingAssessments) $("criteria-overview-note").textContent += ` 기준별 AI 문맥 검토 기록이 없는 항목 ${missingAssessments}개입니다. 새 검토 결과는 AI를 켜고 다시 스캔해야 생성됩니다.`;
   const profile = result.profile || {};
   $("limitations").replaceChildren(...(profile.limitations || []).map(text => node("li", text)));
   $("profile").textContent = `${profile.framework || "프레임워크 미확인"} · 라우트 ${profile.routes || 0}개 · ${profile.auth || "인증 방식 미확인"}`;
@@ -414,6 +450,8 @@ function analysisState(d) {
     return {label: "AI 분석 일부 실패 ⓘ", className: "warning", hint: [note, issueHints[issue] || issueHints.error].filter(Boolean).join(" · ")};
   if (note.includes("AI 검토 생략"))
     return {label: "AI 검토 생략", className: "local", hint: note};
+  const assessments = (d.criteria || []).filter(row => row.assessment?.state === "completed");
+  if (assessments.length) return {label: `AI 기준 문맥 ${assessments.length}/31개 검토`, className: "warning", hint: note};
   if (note.includes("AI 검토 불가"))
     return {label: "AI 검토 불가", className: "warning", hint: note};
   const reviewed = note.match(/AI 2차 검토 (\d+)\/(\d+)건/);
@@ -440,12 +478,18 @@ function render() {
   const fixed = taskGroups.filter(g => g.section === "fixed");
   const done = fixed.filter(g => ["Critical", "High"].includes(g.level)).length;
   const fresh = taskGroups.filter(g => g.fresh).length;
+  const aiCandidates = (d.criteria || []).filter(c => c.assessment?.candidates?.length).length;
+  const externalCandidates = new Set((d.criteria || []).flatMap(c => (c.checks || []).filter(check => check.outcome === "candidate").map(check => check.id))).size;
   $("verdict-title").textContent = urgent ? `배포 전에 ${urgent}가지를 먼저 확인하세요.`
-    : later ? `우선순위가 낮은 ${later}가지를 확인하세요.` : "자동 점검에서 열린 문제가 없습니다.";
+    : later ? `우선순위가 낮은 ${later}가지를 확인하세요.` : externalCandidates ? `외부 검사 추가 확인 대상 ${externalCandidates}개를 확인하세요.` : aiCandidates ? `기준별 AI 추가 후보를 확인하세요 (${aiCandidates}개 기준).` : "자동 점검에서 열린 문제가 없습니다.";
   const notes = d.baseline_commit ? [fresh && `새로 발견한 문제 ${fresh}가지`, fixed.length && `해결된 문제 ${fixed.length}가지`]
     : ["이 브랜치의 현재 커밋과 비교할 이전 검사 결과가 없습니다."];
   const incomplete = (d.criteria || []).filter(c => c.execution !== "completed").length;
   if (incomplete) notes.push(`추가 확인할 기준 ${incomplete}개`);
+  if (aiCandidates) notes.push("기준별 점검 현황에 AI 추가 후보 있음 · 위험 점수 미포함");
+  if (externalCandidates) notes.push("기준별 점검 현황에 의존성·HTTP 검사 후보 있음 · 위험 점수 미포함");
+  const incompleteExternal = new Set((d.criteria || []).flatMap(c => (c.checks || []).filter(check => ["failed", "partial"].includes(check.state)).map(check => check.id))).size;
+  if (incompleteExternal) notes.push(`외부 검사 미완료 ${incompleteExternal}개 · 기준별 사유 확인`);
   $("delta").textContent = notes.filter(Boolean).join(" · ") || "지난 검사와 비교해 새로 발견되거나 해결된 문제가 없습니다.";
   $("resolution").textContent = urgent + done ? `치명·높음 ${urgent + done}가지 중 ${done}가지 해결` : "";
   const latest = projectScans()[0];
@@ -571,9 +615,18 @@ async function startScan(mode = scanMode) {
   const repo = selectedRepo();
   if (!repo || scanning) return;
   if (mode === "ai" && auth?.state !== "ready") { openDrawer("settings"); message("AI 2차 검토를 사용하려면 ChatGPT를 연결하세요."); return; }
+  const options = {path: repo.path, offline: mode !== "ai"};
+  if ($("check-dependencies").checked) options.dependency_check = true;
+  if ($("verification-config").value.trim()) {
+    try { options.verification = JSON.parse($("verification-config").value); }
+    catch { message("HTTP 검증 설정의 JSON 형식을 확인하세요.", true); return; }
+    if (!options.verification || typeof options.verification !== "object" || Array.isArray(options.verification)) {
+      message("HTTP 검증 설정은 JSON 객체여야 합니다.", true); return;
+    }
+  }
   scanMode = mode; remember("localStorage", "vibescan-mode", mode);
   closeScanMenu(); ++jobVersion; clearTimeout(pollTimer); busy(true);
-  try { await api("/api/scan", {path: repo.path, offline: mode !== "ai"}); lastJob = ""; await pollJob(); }
+  try { await api("/api/scan", options); lastJob = ""; await pollJob(); }
   catch (error) { message(error.message, true); await pollJob(); }
 }
 async function loadAuth() {
